@@ -25,56 +25,6 @@
 <!--- BADGES: END --->
 ---
 
-[Alibi](https://docs.seldon.io/projects/alibi) is an open source Python library aimed at machine learning model inspection and interpretation.
-The focus of the library is to provide high-quality implementations of black-box, white-box, local and global
-explanation methods for classification and regression models.
-*  [Documentation](https://docs.seldon.io/projects/alibi/en/stable/)
-
-If you're interested in outlier detection, concept drift or adversarial instance detection, check out our sister project [alibi-detect](https://github.com/SeldonIO/alibi-detect).
-
-<table>
-  <tr valign="top">
-    <td width="50%" >
-        <a href="https://docs.seldon.io/projects/alibi/en/stable/examples/anchor_image_imagenet.html">
-            <br>
-            <b>Anchor explanations for images</b>
-            <br>
-            <br>
-            <img src="https://github.com/SeldonIO/alibi/raw/master/doc/source/_static/anchor_image.png">
-        </a>
-    </td>
-    <td width="50%">
-        <a href="https://docs.seldon.io/projects/alibi/en/stable/examples/integrated_gradients_imdb.html">
-            <br>
-            <b>Integrated Gradients for text</b>
-            <br>
-            <br>
-            <img src="https://github.com/SeldonIO/alibi/raw/master/doc/source/_static/ig_text.png">
-        </a>
-    </td>
-  </tr>
-  <tr valign="top">
-    <td width="50%">
-        <a href="https://docs.seldon.io/projects/alibi/en/stable/methods/CFProto.html">
-            <br>
-            <b>Counterfactual examples</b>
-            <br>
-            <br>
-            <img src="https://github.com/SeldonIO/alibi/raw/master/doc/source/_static/cf.png">
-        </a>
-    </td>
-    <td width="50%">
-        <a href="https://docs.seldon.io/projects/alibi/en/stable/methods/ALE.html">
-            <br>
-            <b>Accumulated Local Effects</b>
-            <br>
-            <br>
-            <img src="https://github.com/SeldonIO/alibi/raw/master/doc/source/_static/ale.png">
-        </a>
-    </td>
-  </tr>
-</table>
-
 ## Table of Contents
 
 * [Installation and Usage](#installation-and-usage)
@@ -98,10 +48,10 @@ Alibi can be installed from:
   ```bash
   pip install alibi
   ```
-  
+
 - Alternatively, the development version can be installed:
   ```bash
-  pip install git+https://github.com/SeldonIO/alibi.git 
+  pip install git+https://github.com/SeldonIO/alibi.git
   ```
 
 - To take advantage of distributed computation of explanations, install `alibi` with `ray`:
@@ -114,9 +64,9 @@ Alibi can be installed from:
   pip install alibi[shap]
   ```
 
-### With conda 
+### With conda
 
-To install from [conda-forge](https://conda-forge.org/) it is recommended to use [mamba](https://mamba.readthedocs.io/en/stable/), 
+To install from [conda-forge](https://conda-forge.org/) it is recommended to use [mamba](https://mamba.readthedocs.io/en/stable/),
 which can be installed to the *base* conda enviroment with:
 
 ```bash
@@ -160,7 +110,7 @@ related to the computed explanation. For example, for the Anchor algorithm the e
 via `explanation.data['anchor']` (or `explanation.anchor`). The exact details of available fields varies
 from method to method so we encourage the reader to become familiar with the
 [types of methods supported](https://docs.seldon.io/projects/alibi/en/stable/overview/algorithms.html).
- 
+
 
 ## Supported Methods
 The following tables summarize the possible use cases for each method.
@@ -248,7 +198,7 @@ These algorithms provide a **distilled** view of the dataset and help construct 
 - Counterfactual Explanations (extension of
   [Wachter et al., 2017](https://arxiv.org/abs/1711.00399))
   - [Documentation](https://docs.seldon.io/projects/alibi/en/stable/methods/CF.html)
-  - Examples: 
+  - Examples:
     [MNIST](https://docs.seldon.io/projects/alibi/en/stable/examples/cf_mnist.html)
 
 - Counterfactual Explanations Guided by Prototypes ([Van Looveren and Klaise, 2019](https://arxiv.org/abs/1907.02584))
@@ -278,13 +228,13 @@ These algorithms provide a **distilled** view of the dataset and help construct 
     [SVM with continuous data](https://docs.seldon.io/projects/alibi/en/stable/examples/kernel_shap_wine_intro.html),
     [multinomial logistic regression with continous data](https://docs.seldon.io/projects/alibi/en/stable/examples/kernel_shap_wine_lr.html),
     [handling categorical variables](https://docs.seldon.io/projects/alibi/en/stable/examples/kernel_shap_adult_lr.html)
-    
+
 - Tree Shapley Additive Explanations ([Lundberg et al., 2020](https://www.nature.com/articles/s42256-019-0138-9))
   - [Documentation](https://docs.seldon.io/projects/alibi/en/stable/methods/TreeSHAP.html)
   - Examples:
     [Interventional (adult income, xgboost)](https://docs.seldon.io/projects/alibi/en/stable/examples/interventional_tree_shap_adult_xgb.html),
     [Path-dependent (adult income, xgboost)](https://docs.seldon.io/projects/alibi/en/stable/examples/path_dependent_tree_shap_adult_xgb.html)
-    
+
 - Trust Scores ([Jiang et al., 2018](https://arxiv.org/abs/1805.11783))
   - [Documentation](https://docs.seldon.io/projects/alibi/en/stable/methods/TrustScores.html)
   - Examples:

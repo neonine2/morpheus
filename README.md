@@ -1,6 +1,3 @@
-<p align="center">
-  <img src="https://raw.githubusercontent.com/SeldonIO/alibi/master/doc/source/_static/Alibi_Explain_Logo_rgb.png" alt="Alibi Logo" width="50%">
-</p>
 
 <!--- BADGES: START --->
 

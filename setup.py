@@ -28,14 +28,14 @@ extras_require = {
 }
 
 if __name__ == '__main__':
-    setup(name='alibi',
-          author='Seldon Technologies Ltd.',
-          author_email='hello@seldon.io',
+    setup(name='deepspace',
+          author='Zitong Wang',
+          author_email='zwang2@caltech.edu',
           version=__version__,  # type: ignore # noqa F821
           description='Algorithms for monitoring and explaining machine learning models',
           long_description=readme(),
           long_description_content_type='text/markdown',
-          url='https://github.com/SeldonIO/alibi',
+          url='https://github.com/neonine2/deepSpace',
           license="Apache 2.0",
           packages=find_packages(),
           include_package_data=True,

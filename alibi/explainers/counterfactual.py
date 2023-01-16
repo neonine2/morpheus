@@ -61,18 +61,6 @@ def _define_func(predict_fn: Callable,
     return func, target_class
 
 
-def CounterFactual(*args, **kwargs):
-    """
-    The class name `CounterFactual` is deprecated, please use `Counterfactual`.
-    """
-    # TODO: remove this function in an upcoming release
-    warning_msg = 'The class name `CounterFactual` is deprecated, please use `Counterfactual`.'
-    import warnings
-    warnings.warn(warning_msg, FutureWarning)
-
-    return Counterfactual(*args, **kwargs)
-
-
 class Counterfactual(Explainer):
 
     def __init__(self,

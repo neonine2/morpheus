@@ -1379,7 +1379,6 @@ class CounterfactualProto(Explainer, FitMixin):
             data['id_proto'] = self.id_proto
 
         # add to explanation dict
-        print("iteration over!!")
         if not self.best_attack:
             logger.warning('No counterfactual found!')
 
@@ -1387,7 +1386,6 @@ class CounterfactualProto(Explainer, FitMixin):
             explanation = Explanation(meta=copy.deepcopy(self.meta), data=data)
             return explanation
 
-        print("object created!!")
         data['all'] = self.cf_global
         data['cf'] = {}
         data['cf']['X'] = best_attack
@@ -1400,7 +1398,9 @@ class CounterfactualProto(Explainer, FitMixin):
         data['cf']['grads_graph'], data['cf']['grads_num'] = grads[0], grads[1]
 
         # create explanation object
+        print("deepcopy start")
         explanation = Explanation(meta=copy.deepcopy(self.meta), data=data)
+        print("deepcopy end")
 
         return explanation
 

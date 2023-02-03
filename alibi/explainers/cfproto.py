@@ -18,7 +18,6 @@ from alibi.utils.tf import argmax_grad, argmin_grad, one_hot_grad, round_grad
 
 logger = logging.getLogger(__name__)
 
-
 def CounterFactualProto(*args, **kwargs):
     """
     The class name `CounterFactualProto` is deprecated, please use `CounterfactualProto`.
@@ -27,14 +26,13 @@ def CounterFactualProto(*args, **kwargs):
     warning_msg = 'The class name `CounterFactualProto` is deprecated, please use `CounterfactualProto`.'
     import warnings
     warnings.warn(warning_msg, FutureWarning)
-
     return CounterfactualProto(*args, **kwargs)
-
 
 class CounterfactualProto(Explainer, FitMixin):
 
     def __init__(self,
                  predict: Union[Callable[[np.ndarray], np.ndarray], tf.keras.Model],
+                 input_transform: Union[Callable[[np.ndarray], np.ndarray], tf.keras.Model],
                  shape: tuple,
                  kappa: float = 0.,
                  beta: float = .1,
@@ -110,6 +108,13 @@ class CounterfactualProto(Explainer, FitMixin):
             Optional `tensorflow` session that will be used if passed instead of creating or inferring one internally.
         """
         super().__init__(meta=copy.deepcopy(DEFAULT_META_CFP))
+
+        # if image as input
+        if len(shape) > 2:
+            patch_shape = shape[1:] # should be [x length, y length, and number of color channels]
+            shape = (shape[0],shape[-1])
+        else:
+            patch_shape = shape
         params = locals()
         remove = ['self', 'predict', 'ae_model', 'enc_model', 'sess', '__class__']
         for key in remove:
@@ -165,6 +170,7 @@ class CounterfactualProto(Explainer, FitMixin):
         self.meta['params'].update(is_cat=self.is_cat)
 
         self.shape = shape
+        self.patch_shape = patch_shape
         self.kappa = kappa
         self.beta = beta
         self.gamma = gamma
@@ -184,6 +190,7 @@ class CounterfactualProto(Explainer, FitMixin):
         self.update_num_grad = update_num_grad
         self.eps = eps
         self.clip = clip
+        self.input_transform = input_transform
         self.write_dir = write_dir
 
         if self.is_cat:
@@ -481,12 +488,14 @@ class CounterfactualProto(Explainer, FitMixin):
         self.adv = tf.Variable(np.zeros(shape), dtype=tf.float32, name='adv')
         self.adv_s = tf.Variable(np.zeros(shape), dtype=tf.float32, name='adv_s')
         self.target = tf.Variable(np.zeros((self.batch_size, self.classes)), dtype=tf.float32, name='target')
+        # self.patch = tf.Variable(np.zeros(patch_shape), dtype=tf.float32, name='patch')
 
         # variable for target class proto
         if self.enc_model:
             self.shape_enc = self.enc.predict(np.zeros(self.shape)).shape  # type: ignore[union-attr]
         else:
-            self.shape_enc = shape
+            # shape_env may not be equal to shape
+            self.shape_enc = self.patch_shape
 
         self.target_proto = tf.Variable(np.zeros(self.shape_enc), dtype=tf.float32, name='target_proto')
 
@@ -501,6 +510,7 @@ class CounterfactualProto(Explainer, FitMixin):
         self.assign_target = tf.placeholder(tf.float32, (self.batch_size, self.classes), name='assign_target')
         self.assign_const = tf.placeholder(tf.float32, [self.batch_size], name='assign_const')
         self.assign_target_proto = tf.placeholder(tf.float32, self.shape_enc, name='assign_target_proto')
+        # self.assign_patch = tf.placeholder(tf.float32, patch_shape, name='assign_patch')
 
         # define conditions and values for element-wise shrinkage thresholding
         with tf.name_scope('shrinkage_thresholding') as scope:
@@ -601,14 +611,15 @@ class CounterfactualProto(Explainer, FitMixin):
                 self.loss_attack_s = tf.reduce_sum(self.const * loss_attack_s)
 
         with tf.name_scope('loss_prototype') as scope:
+            # CHANGE: adv is delta, so adv and target_proto are no longer the same shape
             if self.enc_model:
                 self.loss_proto = self.theta * tf.square(
-                    tf.norm(self.enc(self.adv_cat) - self.target_proto))  # type: ignore[misc]
+                    tf.norm(self.enc(self.input_transform(self.adv_cat)) - self.target_proto))  # type: ignore[misc]
                 self.loss_proto_s = self.theta * tf.square(
-                    tf.norm(self.enc(self.adv_cat_s) - self.target_proto))  # type: ignore[misc]
+                    tf.norm(self.enc(self.input_transform(self.adv_cat_s)) - self.target_proto))  # type: ignore[misc]
             elif self.use_kdtree:
-                self.loss_proto = self.theta * tf.square(tf.norm(self.adv - self.target_proto))
-                self.loss_proto_s = self.theta * tf.square(tf.norm(self.adv_s - self.target_proto))
+                self.loss_proto = self.theta * tf.square(tf.norm(self.input_transform(self.adv) - self.target_proto))
+                self.loss_proto_s = self.theta * tf.square(tf.norm(self.input_transform(self.adv_s) - self.target_proto))
             else:  # no encoder available and no k-d trees used
                 self.loss_proto = tf.constant(0.)
                 self.loss_proto_s = tf.constant(0.)
@@ -648,6 +659,7 @@ class CounterfactualProto(Explainer, FitMixin):
         self.setup.append(self.adv.assign(self.assign_adv))
         self.setup.append(self.adv_s.assign(self.assign_adv_s))
         self.setup.append(self.target_proto.assign(self.assign_target_proto))
+        # self.setup.append(self.patch.assign(self.assign_patch))
         if self.is_cat:
             self.setup.append(self.map_var.assign(self.assign_map))
 
@@ -661,6 +673,7 @@ class CounterfactualProto(Explainer, FitMixin):
 
     def fit(self,
             train_data: np.ndarray,
+            preds:np.ndarray,
             trustscore_kwargs: Optional[dict] = None,
             d_type: str = 'abdm',
             w: Optional[float] = None,
@@ -708,10 +721,10 @@ class CounterfactualProto(Explainer, FitMixin):
         # update metadata
         self.meta['params'].update(params)
 
-        if self.model:
-            preds = np.argmax(self.predict.predict(train_data), axis=1)  # type: ignore
-        else:
-            preds = np.argmax(self.predict(train_data), axis=1)
+        # if self.model:
+        #     preds = np.argmax(self.predict.predict(train_data), axis=1)  # type: ignore
+        # else:
+        #     preds = np.argmax(self.predict(train_data), axis=1)
 
         self.cat_vars_ord = dict()  # type: dict
         if self.is_cat:  # compute distance metrics for categorical variables
@@ -918,7 +931,7 @@ class CounterfactualProto(Explainer, FitMixin):
         Parameters
         ----------
         X
-            Instance to encode and calculate distance metrics for.
+            Perturbation.
         adv_class
             Predicted class on the perturbed instance.
         orig_class
@@ -942,8 +955,10 @@ class CounterfactualProto(Explainer, FitMixin):
             dist_adv = np.linalg.norm(X_enc - adv_proto)
             dist_orig = np.linalg.norm(X_enc - orig_proto)
         elif self.use_kdtree:
-            dist_adv = self.kdtrees[adv_class].query(X, k=1)[0]
-            dist_orig = self.kdtrees[orig_class].query(X, k=1)[0]
+            Xpatch = self.input_transform(X).eval(session=self.sess)
+            Xpatch = Xpatch.reshape(Xpatch.shape[0], -1)
+            dist_adv = self.kdtrees[adv_class].query(Xpatch, k=1)[0]
+            dist_orig = self.kdtrees[orig_class].query(Xpatch, k=1)[0]
         else:
             logger.warning('Need either an encoder or the k-d trees enabled to compute distance scores.')
         return dist_orig / (dist_adv + eps)  # type: ignore[return-value]
@@ -954,7 +969,7 @@ class CounterfactualProto(Explainer, FitMixin):
         """
         Find a counterfactual (CF) for instance `X` using a fast iterative shrinkage-thresholding algorithm (FISTA).
 
-        Parameters
+        Parameters mk
         ----------
         X
             Instance to attack.
@@ -1032,7 +1047,7 @@ class CounterfactualProto(Explainer, FitMixin):
         dist_proto = {}
         if self.enc_model:
 
-            X_enc = self.enc.predict(X)  # type: ignore[union-attr]
+            X_enc = self.enc.predict(self.input_transform(X))  # type: ignore[union-attr]
             class_dict = self.class_proto if k is None else self.class_enc
 
             for c, v in class_dict.items():
@@ -1056,13 +1071,15 @@ class CounterfactualProto(Explainer, FitMixin):
             for c in range(self.classes):
                 if c not in target_class:
                     continue
-                dist_c, idx_c = self.kdtrees[c].query(X_num, k=k)
+                Xpatch = self.input_transform(X_num).eval(session=self.sess)
+                Xpatch = Xpatch.reshape(Xpatch.shape[0], -1)
+                dist_c, idx_c = self.kdtrees[c].query(Xpatch, k=k)
                 dist_proto[c] = dist_c[0][-1]
                 self.class_proto[c] = self.X_by_class[c][idx_c[0][-1]].reshape(1, -1)
 
         if self.enc_or_kdtree:
             self.id_proto = min(dist_proto, key=dist_proto.get)  # type: ignore[arg-type]
-            proto_val = self.class_proto[self.id_proto]
+            proto_val = self.class_proto[self.id_proto].reshape(self.patch_shape)
             if verbose:
                 print('Prototype class: {}'.format(self.id_proto))
         else:  # no prototype loss term used
@@ -1101,7 +1118,9 @@ class CounterfactualProto(Explainer, FitMixin):
                          self.assign_const: const,
                          self.assign_adv: X_num,
                          self.assign_adv_s: X_num,
-                         self.assign_target_proto: proto_val}
+                         self.assign_target_proto: proto_val,
+                         # self.assign_patch: patch[0],
+                         }
             if self.is_cat:
                 feed_dict[self.assign_map] = self.d_abs_ragged
             self.sess.run(self.setup, feed_dict=feed_dict)
@@ -1273,6 +1292,7 @@ class CounterfactualProto(Explainer, FitMixin):
         return best_attack, overall_best_grad
 
     def explain(self,
+                # patch: np.ndarray,
                 X: np.ndarray,
                 Y: Optional[np.ndarray] = None,
                 target_class: Optional[list] = None,
@@ -1288,7 +1308,7 @@ class CounterfactualProto(Explainer, FitMixin):
         Parameters
         ----------
         X
-            Instances to attack.
+            Initial perturbation
         Y
             Labels for `X` as one-hot-encoding.
         target_class
@@ -1359,6 +1379,7 @@ class CounterfactualProto(Explainer, FitMixin):
             data['id_proto'] = self.id_proto
 
         # add to explanation dict
+        print("iteration over!!")
         if not self.best_attack:
             logger.warning('No counterfactual found!')
 
@@ -1366,6 +1387,7 @@ class CounterfactualProto(Explainer, FitMixin):
             explanation = Explanation(meta=copy.deepcopy(self.meta), data=data)
             return explanation
 
+        print("object created!!")
         data['all'] = self.cf_global
         data['cf'] = {}
         data['cf']['X'] = best_attack

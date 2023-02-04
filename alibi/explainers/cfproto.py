@@ -116,7 +116,7 @@ class CounterfactualProto(Explainer, FitMixin):
         else:
             patch_shape = shape
         params = locals()
-        remove = ['self', 'predict', 'ae_model', 'enc_model', 'sess', '__class__']
+        remove = ['self', 'predict', 'input_transform', 'ae_model', 'enc_model', 'sess', '__class__']
         for key in remove:
             params.pop(key)
         self.meta['params'].update(params)
@@ -1398,9 +1398,8 @@ class CounterfactualProto(Explainer, FitMixin):
         data['cf']['grads_graph'], data['cf']['grads_num'] = grads[0], grads[1]
 
         # create explanation object
-        print("deepcopy start")
         explanation = Explanation(meta=copy.deepcopy(self.meta), data=data)
-        print("deepcopy end")
+        
 
         return explanation
 

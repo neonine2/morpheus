@@ -2,9 +2,10 @@ import copy
 import logging
 import sys
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
-#test
 import numpy as np
 import tensorflow.compat.v1 as tf
+import torch
+from my_models import TissueClassifier
 
 from alibi.api.defaults import DEFAULT_DATA_CFP, DEFAULT_META_CFP
 from alibi.api.interfaces import Explainer, Explanation, FitMixin
@@ -17,6 +18,90 @@ from alibi.utils.mapping import (num_to_ord, ohe_to_ord, ohe_to_ord_shape,
 from alibi.utils.tf import argmax_grad, argmin_grad, one_hot_grad, round_grad
 
 logger = logging.getLogger(__name__)
+
+def add_init_layer(patch, minVal, model):
+    H,W,C = model.input.shape[1:]
+    new_weights = np.zeros((C*H*W,C))
+    for c_ind in range(C):
+        start = (H*W)*c_ind
+        fin = (H*W)*(c_ind+1)
+        new_weights[start:fin,c_ind] = 1
+    newInput = tf.keras.Input(shape=(C,))
+    #incorporate mu ensures that the minimum value
+    x = tf.keras.layers.Dense(C*H*W, kernel_initializer=tf.constant_initializer(new_weights),
+                          bias_initializer=tf.constant_initializer(patch-minVal),activation='relu')(newInput)
+    x = tf.keras.layers.Dense(C*H*W, kernel_initializer=tf.keras.initializers.Identity(),
+                          bias_initializer=tf.constant_initializer(patch*0+minVal))(x)
+    x = tf.keras.layers.Reshape((H, W, C))(x)
+    input_transform = tf.keras.Model(newInput, x)
+
+    newOutputs = model(x)
+    completeModel = tf.keras.Model(newInput, newOutputs)
+    return completeModel, input_transform
+
+def generate_cf(X_orig, y_orig, model_arch, model_path, channel_to_perturb, data_dict):
+    tf.disable_eager_execution()
+
+    channel = data_dict['channel']
+    sigma = data_dict['stdev']
+    mu = data_dict['mean']
+
+    #normalize data
+    X_train = (data_dict['X_train'] - mu) / sigma
+    X_orig = (X_orig - mu) / sigma
+    minVal = (0 - mu) / sigma
+
+    # initialize model
+    # model = tf.keras.models.load_model(model_path,compile=False)
+    in_channels = len(channel)
+    model = TissueClassifier.load_from_checkpoint(model_path, 
+                                                  in_channels=in_channels,
+                                                  img_size=X_orig.shape,
+                                                  modelArch=model_arch)
+    model.eval()
+
+    # define predict function
+    predict_fn = lambda x: model(x)
+
+    #generate predicted label to build tree
+    preds = np.argmax(predict_fn(X_train), axis=1)
+
+    # initialize explainer
+    isPerturbed = np.array([True if name in channel_to_perturb else False for name in channel])
+    maxVal = np.max(X_orig[:,:,isPerturbed], axis=(0,1))
+    feature_range = (np.ones(in_channels),np.ones(in_channels))
+    feature_range[0][isPerturbed], feature_range[1][isPerturbed] = -(maxVal-minVal[isPerturbed]), 10*(maxVal-minVal[isPerturbed])
+    feature_range[0][~isPerturbed], feature_range[1][~isPerturbed] = -1e-21, +1e-21
+    shape = (1,) + X_orig.shape
+    model, input_transform = add_init_layer(X_orig, minVal, model)
+
+    cf = CounterfactualProto(predict_fn, input_transform, shape, use_kdtree=True, 
+                             theta=10, kappa = 0.3,
+                             learning_rate_init=0.1, 
+                             beta=1e-1, max_iterations=3,
+                             feature_range=feature_range, 
+                             c_init=1000., c_steps=5, clip=(-1000., 1000.))
+    cf.fit(X_train,preds)
+    X = np.zeros(in_channels)
+    explanation = cf.explain(X=X[None,:], Y=y_orig[None,:], target_class=[1], verbose=True)
+
+    if explanation.cf is not None:
+        cf_all = explanation.cf['X'][0]
+        cf_all = cf.input_transform(cf_all[None,:])
+        print(cf_all)
+        counterfactual =  cf_all * sigma + mu
+        orig = X_orig * sigma + mu
+        cf_delta = (counterfactual - orig) / orig * 100
+        cf_prob = explanation.cf['proba'][0]
+        print('cf probability: ' + str(cf_prob))
+        # print('compute probability:', str(model.predict(cf_all[None,])))
+    else:
+        cf_delta = None
+        cf_prob = None
+        cf_all = None
+        print("No counterfactual found!")
+    return explanation, cf_prob, cf_delta, channel_to_perturb
+
 
 def CounterFactualProto(*args, **kwargs):
     """

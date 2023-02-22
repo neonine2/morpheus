@@ -1,11 +1,16 @@
+import os
 import copy
 import logging
 import sys
+import _pickle as pickle
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 import numpy as np
 import tensorflow.compat.v1 as tf
 import torch
-from my_models import TissueClassifier
+import time
+
+from utils.my_models import TissueClassifier
+from tensorflow.keras import models
 
 from alibi.api.defaults import DEFAULT_DATA_CFP, DEFAULT_META_CFP
 from alibi.api.interfaces import Explainer, Explanation, FitMixin
@@ -18,89 +23,193 @@ from alibi.utils.mapping import (num_to_ord, ohe_to_ord, ohe_to_ord_shape,
 from alibi.utils.tf import argmax_grad, argmin_grad, one_hot_grad, round_grad
 
 logger = logging.getLogger(__name__)
+tf.logging.set_verbosity(tf.logging.ERROR)
 
-def add_init_layer(patch, minVal, model):
-    H,W,C = model.input.shape[1:]
+def save_object(obj, filename):
+    with open(filename, 'wb') as outp:  # Overwrites any existing file.
+        pickle.dump(obj, outp, -1)
+
+def load_object(filename):
+    with open(filename, 'rb') as outp: 
+        return pickle.load(outp)
+
+def add_init_layer(patch, minVal, X_orig_mean, model, ml_framework='tf'):
+    if len(patch.shape) > 2:
+        H,W,C = patch.shape
+    else:
+        H,W,C = 1,1,patch.shape[-1]
     new_weights = np.zeros((C*H*W,C))
     for c_ind in range(C):
         start = (H*W)*c_ind
         fin = (H*W)*(c_ind+1)
         new_weights[start:fin,c_ind] = 1
+    
     newInput = tf.keras.Input(shape=(C,))
     #incorporate mu ensures that the minimum value
+    bias = (patch-minVal-X_orig_mean).flatten()
     x = tf.keras.layers.Dense(C*H*W, kernel_initializer=tf.constant_initializer(new_weights),
-                          bias_initializer=tf.constant_initializer(patch-minVal),activation='relu')(newInput)
+                        bias_initializer=tf.constant_initializer(bias),activation='relu')(newInput)
     x = tf.keras.layers.Dense(C*H*W, kernel_initializer=tf.keras.initializers.Identity(),
-                          bias_initializer=tf.constant_initializer(patch*0+minVal))(x)
-    x = tf.keras.layers.Reshape((H, W, C))(x)
+                        bias_initializer=tf.constant_initializer(np.tile(minVal, H*W)))(x)
+    if H > 1 or W > 1:
+        x = tf.keras.layers.Reshape((H, W, C))(x)
     input_transform = tf.keras.Model(newInput, x)
-
-    newOutputs = model(x)
-    completeModel = tf.keras.Model(newInput, newOutputs)
+    if ml_framework != 'pytorch':
+        newOutputs = model(x)
+        completeModel = tf.keras.Model(newInput, newOutputs)
+    else:
+        fc1 = torch.nn.Linear(C, C*H*W, bias=True)
+        fc1.weight.data = torch.from_numpy(new_weights).float()
+        fc1.bias.data = torch.from_numpy(patch-minVal).float().permute(2,0,1).flatten()
+        activation = torch.nn.ReLU()
+        fc2 = torch.nn.Linear(C*H*W, C*H*W, bias=True)
+        fc2.weight.data = torch.nn.init.eye_(torch.empty(C*H*W, C*H*W))
+        fc2.bias.data = torch.from_numpy(np.repeat(minVal,H*W)).float()
+        if H > 1 or W > 1:
+            reshape_layer = torch.nn.Unflatten(1, (C, H, W))
+            completeModel = torch.nn.Sequential(fc1, activation, fc2, reshape_layer, model)
+        completeModel = torch.nn.Sequential(fc1, activation, fc2, model)
     return completeModel, input_transform
 
-def generate_cf(X_orig, y_orig, model_arch, model_path, channel_to_perturb, data_dict):
-    tf.disable_eager_execution()
+def mean_skipfew(ufunc, foo, preserveAxis=None):
+    r = np.arange(foo.ndim)   
+    if preserveAxis is not None:
+        preserveAxis = tuple(np.delete(r, preserveAxis))
+    return ufunc(foo, axis=preserveAxis)
 
-    channel = data_dict['channel']
+def load_trained_model(model_path, ml_framework):
+
+    #load model
+    if ml_framework == 'pytorch':
+        model = TissueClassifier.load_from_checkpoint(model_path, in_channels=len(data_dict['channel']), img_size=X.shape,
+                                                        modelArch=model_arch).float()
+        model.eval()
+    else:
+        model = models.load_model(model_path)
+    return model
+    # if model.predict(X[None,:]) != y:
+        # print('Model wrongly predicts instance is already satisfied')
+        # return None
+    # X = tf.image.resize(X, size=(32,32), method='nearest').numpy()
+    # data_dict['X_train'] = tf.image.resize(data_dict['X_train'], size=(32,32), method='nearest').numpy()
+
+def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, optimization_params=dict(), 
+                SAVE=False, save_dir=None, patch_id=None, ex=None):
+
+    # Obtain data features
+    X_train = data_dict['X_train']
+    channel = np.array(data_dict['channel'])
     sigma = data_dict['stdev']
     mu = data_dict['mean']
+    C = X_orig.shape[-1]
+    X_orig_mean = np.mean(X_orig,axis=(0,1))
 
+    # For MLP, make sure to average across each channel, # for CNNs, make sure to adjust input shape
+    model_name = model_path.split(os.sep)[-1]
+    model_arch = model_name.split('.')[0].lower()
+    model_ext = model_name.split('.')[1].lower()
+    if model_ext == 'h5':
+        ml_framework = 'tensorflow'
+    else:
+        ml_framework = 'pytorch'
+    if model_arch == 'mlp':
+        X_orig = X_orig_mean
+        X_train = np.mean(X_train,axis=(1,2))
+    elif model_arch == 'resnet':
+        model_input_shape = (None,32,32,37)
+        if X_orig.shape != model_input_shape[1:]:
+            resize_fn = tf.keras.layers.Resizing(model_input_shape[1], model_input_shape[2], interpolation='nearest')
+            X_train = resize_fn(X_train).numpy()
+            X_orig = resize_fn(X_orig).numpy()
+    
     #normalize data
-    X_train = (data_dict['X_train'] - mu) / sigma
-    X_orig = (X_orig - mu) / sigma
-    minVal = (0 - mu) / sigma
-
+    X_train = (X_train - mu) / sigma
+    X_normed = (X_orig - mu) / sigma
+    X_orig_mean = (X_orig_mean - mu) / sigma
+    
     # initialize model
-    # model = tf.keras.models.load_model(model_path,compile=False)
-    in_channels = len(channel)
-    model = TissueClassifier.load_from_checkpoint(model_path, 
-                                                  in_channels=in_channels,
-                                                  img_size=X_orig.shape,
-                                                  modelArch=model_arch)
-    model.eval()
-
-    # define predict function
-    predict_fn = lambda x: model(x)
+    tf.disable_eager_execution()
+    model = load_trained_model(model_path, ml_framework)
 
     #generate predicted label to build tree
-    preds = np.argmax(predict_fn(X_train), axis=1)
-
-    # initialize explainer
-    isPerturbed = np.array([True if name in channel_to_perturb else False for name in channel])
-    maxVal = np.max(X_orig[:,:,isPerturbed], axis=(0,1))
-    feature_range = (np.ones(in_channels),np.ones(in_channels))
-    feature_range[0][isPerturbed], feature_range[1][isPerturbed] = -(maxVal-minVal[isPerturbed]), 10*(maxVal-minVal[isPerturbed])
-    feature_range[0][~isPerturbed], feature_range[1][~isPerturbed] = -1e-21, +1e-21
-    shape = (1,) + X_orig.shape
-    model, input_transform = add_init_layer(X_orig, minVal, model)
-
-    cf = CounterfactualProto(predict_fn, input_transform, shape, use_kdtree=True, 
-                             theta=10, kappa = 0.3,
-                             learning_rate_init=0.1, 
-                             beta=1e-1, max_iterations=3,
-                             feature_range=feature_range, 
-                             c_init=1000., c_steps=5, clip=(-1000., 1000.))
-    cf.fit(X_train,preds)
-    X = np.zeros(in_channels)
-    explanation = cf.explain(X=X[None,:], Y=y_orig[None,:], target_class=[1], verbose=True)
-
-    if explanation.cf is not None:
-        cf_all = explanation.cf['X'][0]
-        cf_all = cf.input_transform(cf_all[None,:])
-        print(cf_all)
-        counterfactual =  cf_all * sigma + mu
-        orig = X_orig * sigma + mu
-        cf_delta = (counterfactual - orig) / orig * 100
-        cf_prob = explanation.cf['proba'][0]
-        print('cf probability: ' + str(cf_prob))
-        # print('compute probability:', str(model.predict(cf_all[None,])))
+    if ml_framework == 'pytorch':
+        preds = np.argmax(model(torch.from_numpy(X_train).permute(0, 3, 1, 2).float())
+                          .detach().numpy(), axis=1)
     else:
-        cf_delta = None
-        cf_prob = None
-        cf_all = None
-        print("No counterfactual found!")
-    return explanation, cf_prob, cf_delta, channel_to_perturb
+        preds = model.predict(X_train)
+        preds = np.argmax(preds,axis=1)
+    
+    # Adding init layer to model
+    # make sure X_orig is unnormalized when passed into add_init_layer
+    minVal = (0-mu)/sigma
+    altered_model, input_transform = add_init_layer(X_normed, minVal, X_orig_mean, model, ml_framework)
+
+    # Set range of each channel to perturb
+    feature_range = (np.ones(C),np.ones(C))
+    isPerturbed = np.array([True if name in channel_to_perturb else False for name in channel])
+    feature_range[0][~isPerturbed] = X_orig_mean[~isPerturbed]-1e-30
+    feature_range[1][~isPerturbed] = X_orig_mean[~isPerturbed]+1e-30
+    maxVal = mean_skipfew(np.max, X_normed, preserveAxis=X_normed.ndim-1)
+    feature_range[0][isPerturbed] = X_orig_mean[isPerturbed]-(maxVal[isPerturbed]-minVal[isPerturbed])
+    nfold = 10 # maximum perturbation in terms of fold increase relative to unnormalized intensity
+    meanVal = (mean_skipfew(np.mean, X_orig, preserveAxis=X_orig.ndim-1) - mu) / sigma
+    feature_range[1][isPerturbed] = X_orig_mean[isPerturbed]+nfold*meanVal[isPerturbed]+nfold*mu[isPerturbed]/sigma[isPerturbed] 
+
+    # define predict function
+    if ml_framework == 'pytorch':
+        predict_fn = lambda x: torch.nn.functional.softmax(altered_model(torch.from_numpy(x)
+                                                                 .float()),dim=0).detach().numpy()
+    else:
+        # predict_fn = lambda x : altered_model.predict(x) 
+        predict_fn = altered_model
+   
+    cf = CounterfactualProto(predict_fn, input_transform, (1,) + X_orig.shape, 
+                             feature_range=feature_range, **optimization_params)
+    t1 = time.time()
+    cf.fit(X_train,preds)
+    t2 = time.time()
+    # do stuff
+    print(f'fit step time elapsed = {t2 - t1}')
+    # X = np.zeros([1,C]) # initialize perturbation as a zero-vector
+    X = X_orig_mean[None,:]
+    explanation = cf.explain(X=X, Y=y_orig[None,:], target_class=[1], verbose=False)
+    t3 = time.time()
+    print(f'explain step time elapsed = {t3 - t2}')
+
+    cf_delta = None
+    cf_prob = None
+    cf_all = None
+    cf_perturbed = None
+    if explanation.cf is not None:
+        cf_prob = explanation.cf['proba'][0]
+        cf = explanation.cf['X'][0]
+        cf_all = np.maximum(0,cf + X_normed - minVal - X_orig_mean) + minVal
+        X_perturbed = mean_skipfew(np.mean, cf_all*sigma+mu, preserveAxis=cf_all.ndim-1)
+        X_orig = X_orig_mean*sigma+mu
+        
+        print(f"cf probability: {cf_prob}")
+        print(f"compute probability:{predict_fn.predict(explanation.cf['X'])}")
+        print(f"compute probability:{model.predict(cf_all[None,])}")
+        cf_delta = (X_perturbed  - X_orig) / X_orig * 100
+        print(f"cf unperturbed: {np.max(np.abs(cf_delta[~isPerturbed]))}")
+        cf_perturbed = dict(zip(channel[isPerturbed],cf_delta[isPerturbed]))
+        print(f"cf perturbed: {cf_perturbed}")
+
+    if SAVE:
+        if patch_id is None:
+            raise ValueError("Value of file_id must be passed if SAVE is true.")
+        if save_dir is None:
+            raise ValueError("Please provide directory where output will be saved.")
+        else:
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+        savedFile = os.path.join(save_dir, "patch_{}.npz".format(patch_id))
+        np.savez(savedFile, explanation=explanation,
+                            cf_delta=cf_delta,
+                            cf_prob=cf_prob,
+                            cf_perturbed=cf_perturbed,
+                            channel_to_perturb=channel_to_perturb)
+    return cf_delta, cf_prob, cf_perturbed
 
 
 def CounterFactualProto(*args, **kwargs):
@@ -136,6 +245,7 @@ class CounterfactualProto(Explainer, FitMixin):
                  eps: tuple = (1e-3, 1e-3),
                  clip: tuple = (-1000., 1000.),
                  update_num_grad: int = 1,
+                 trustscore: Optional[str] = None,
                  write_dir: Optional[str] = None,
                  sess: Optional[tf.Session] = None) -> None:
         """
@@ -187,6 +297,8 @@ class CounterfactualProto(Explainer, FitMixin):
             obtained from the `tensorflow` graph.
         update_num_grad
             If numerical gradients are used, they will be updated every `update_num_grad` iterations.
+        trustscore
+            Directory where trustscore object is to be used
         write_dir
             Directory to write `tensorboard` files to.
         sess
@@ -215,6 +327,12 @@ class CounterfactualProto(Explainer, FitMixin):
         is_enc = isinstance(enc_model, tf.keras.Model)
         self.meta['params'].update(is_model=is_model, is_ae=is_ae, is_enc=is_enc)
 
+        # if trustscore object path is provided,use it
+        if isinstance(trustscore, str):
+            self.trustscore = load_object(trustscore)
+        else:
+            self.trustscore = None
+
         # if session provided, use it
         if isinstance(sess, tf.Session):
             self.sess = sess
@@ -227,6 +345,7 @@ class CounterfactualProto(Explainer, FitMixin):
         else:  # black-box model
             self.model = False
             self.classes = self.predict(np.zeros(shape)).shape[1]
+            print(f'Black box model with {self.classes} classes')
 
         if is_enc:
             self.enc_model = True
@@ -902,15 +1021,22 @@ class CounterfactualProto(Explainer, FitMixin):
                 self.class_enc[i] = enc_data[idx]
         elif self.use_kdtree:
             logger.warning('No encoder specified. Using k-d trees to represent class prototypes.')
-            if trustscore_kwargs is not None:
-                ts = TrustScore(**trustscore_kwargs)
+            if self.trustscore is None:
+                if trustscore_kwargs is not None:
+                    ts = TrustScore(**trustscore_kwargs)
+                else:
+                    ts = TrustScore()
+                if self.is_cat:  # map categorical to numerical data
+                    train_data = ord_to_num(train_data_ord, self.d_abs)
+                ts.fit(train_data, preds, classes=self.classes)  # type: ignore
+                self.kdtrees = ts.kdtrees
+                self.X_by_class = ts.X_kdtree
+                save_object(ts, 'trustscore.pkl')
+                print('Trustscore object saved as pickle file')
             else:
-                ts = TrustScore()
-            if self.is_cat:  # map categorical to numerical data
-                train_data = ord_to_num(train_data_ord, self.d_abs)
-            ts.fit(train_data, preds, classes=self.classes)  # type: ignore
-            self.kdtrees = ts.kdtrees
-            self.X_by_class = ts.X_kdtree
+                self.kdtrees = self.trustscore.kdtrees
+                self.X_by_class = self.trustscore.X_kdtree
+            
 
         return self
 
@@ -982,8 +1108,7 @@ class CounterfactualProto(Explainer, FitMixin):
         # find instances where the gradient is 0
         idx_nograd = np.where(f(preds) - g(preds) <= - self.kappa)[0]
         if len(idx_nograd) == X.shape[0]:
-            return np.zeros(X.shape)
-
+            return np.zeros((1,*X.shape[1:]))
         dl_df = f(preds_pert_pos) - f(preds_pert_neg)  # N*P
         dl_dg = g(preds_pert_pos) - g(preds_pert_neg)  # N*P
         dl_dp = dl_df - dl_dg  # N*P

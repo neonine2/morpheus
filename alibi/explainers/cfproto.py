@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 import numpy as np
 import tensorflow.compat.v1 as tf
 # import torch
-# import time
+import time
 
 # from utils.my_models import TissueClassifier
 from tensorflow.keras import models
@@ -78,7 +78,6 @@ def mean_skipfew(ufunc, foo, preserveAxis=None):
     return ufunc(foo, axis=preserveAxis)
 
 def load_trained_model(model_path, ml_framework):
-
     #load model
     if ml_framework == 'pytorch':
         model = TissueClassifier.load_from_checkpoint(model_path, in_channels=len(data_dict['channel']), img_size=X.shape,
@@ -92,7 +91,7 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, optim
                 SAVE=False, save_dir=None, patch_id=None):
 
     # Obtain data features
-    X_train = data_dict['X_train']
+    # X_train = data_dict['X_train']
     channel = np.array(data_dict['channel'])
     sigma = data_dict['stdev']
     mu = data_dict['mean']
@@ -109,16 +108,16 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, optim
         ml_framework = 'pytorch'
     if model_arch == 'mlp':
         X_orig = X_orig_mean
-        X_train = np.mean(X_train,axis=(1,2))
+        # X_train = np.mean(X_train,axis=(1,2))
     elif model_arch == 'resnet':
         model_input_shape = (None,32,32,37)
         if X_orig.shape != model_input_shape[1:]:
             resize_fn = tf.keras.layers.Resizing(model_input_shape[1], model_input_shape[2], interpolation='nearest')
-            X_train = resize_fn(X_train).numpy()
+            # X_train = resize_fn(X_train).numpy()
             X_orig = resize_fn(X_orig).numpy()
     
     #normalize data
-    X_train = (X_train - mu) / sigma
+    # X_train = (X_train - mu) / sigma
     X_normed = (X_orig - mu) / sigma
     X_orig_mean = (X_orig_mean - mu) / sigma
     
@@ -127,12 +126,12 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, optim
     model = load_trained_model(model_path, ml_framework)
 
     #generate predicted label to build tree
-    if ml_framework == 'pytorch':
-        preds = np.argmax(model(torch.from_numpy(X_train).permute(0, 3, 1, 2).float())
-                          .detach().numpy(), axis=1)
-    else:
-        preds = model.predict(X_train)
-        preds = np.argmax(preds,axis=1)
+    # if ml_framework == 'pytorch':
+    #     preds = np.argmax(model(torch.from_numpy(X_train).permute(0, 3, 1, 2).float())
+    #                       .detach().numpy(), axis=1)
+    # else:
+    #     preds = model.predict(X_train)
+    #     preds = np.argmax(preds,axis=1)
     
     # Adding init layer to model
     # make sure X_orig is unnormalized when passed into add_init_layer
@@ -160,16 +159,16 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, optim
    
     cf = CounterfactualProto(predict_fn, input_transform, (1,) + X_orig.shape, 
                              feature_range=feature_range, **optimization_params)
-    # t1 = time.time()
-    cf.fit(X_train,preds)
-    # t2 = time.time()
+    t1 = time.time()
+    cf.fit(train_data=np.array([]),preds=np.array([]))
+    t2 = time.time()
     # do stuff
-    # print(f'fit step time elapsed = {t2 - t1}')
+    print(f'fit step time elapsed = {t2 - t1}')
     # X = np.zeros([1,C]) # initialize perturbation as a zero-vector
     X = X_orig_mean[None,:]
     explanation = cf.explain(X=X, Y=y_orig[None,:], target_class=[1], verbose=False)
-    # t3 = time.time()
-    # print(f'explain step time elapsed = {t3 - t2}')
+    t3 = time.time()
+    print(f'explain step time elapsed = {t3 - t2}')
 
     cf_delta = None
     cf_prob = None

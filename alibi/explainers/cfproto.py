@@ -6,10 +6,10 @@ import _pickle as pickle
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 import numpy as np
 import tensorflow.compat.v1 as tf
-import torch
-import time
+# import torch
+# import time
 
-from utils.my_models import TissueClassifier
+# from utils.my_models import TissueClassifier
 from tensorflow.keras import models
 
 from alibi.api.defaults import DEFAULT_DATA_CFP, DEFAULT_META_CFP
@@ -85,16 +85,11 @@ def load_trained_model(model_path, ml_framework):
                                                         modelArch=model_arch).float()
         model.eval()
     else:
-        model = models.load_model(model_path)
+        model = models.load_model(model_path, compile=False)
     return model
-    # if model.predict(X[None,:]) != y:
-        # print('Model wrongly predicts instance is already satisfied')
-        # return None
-    # X = tf.image.resize(X, size=(32,32), method='nearest').numpy()
-    # data_dict['X_train'] = tf.image.resize(data_dict['X_train'], size=(32,32), method='nearest').numpy()
 
 def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, optimization_params=dict(), 
-                SAVE=False, save_dir=None, patch_id=None, ex=None):
+                SAVE=False, save_dir=None, patch_id=None):
 
     # Obtain data features
     X_train = data_dict['X_train']
@@ -165,16 +160,16 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, optim
    
     cf = CounterfactualProto(predict_fn, input_transform, (1,) + X_orig.shape, 
                              feature_range=feature_range, **optimization_params)
-    t1 = time.time()
+    # t1 = time.time()
     cf.fit(X_train,preds)
-    t2 = time.time()
+    # t2 = time.time()
     # do stuff
-    print(f'fit step time elapsed = {t2 - t1}')
+    # print(f'fit step time elapsed = {t2 - t1}')
     # X = np.zeros([1,C]) # initialize perturbation as a zero-vector
     X = X_orig_mean[None,:]
     explanation = cf.explain(X=X, Y=y_orig[None,:], target_class=[1], verbose=False)
-    t3 = time.time()
-    print(f'explain step time elapsed = {t3 - t2}')
+    # t3 = time.time()
+    # print(f'explain step time elapsed = {t3 - t2}')
 
     cf_delta = None
     cf_prob = None
@@ -327,10 +322,11 @@ class CounterfactualProto(Explainer, FitMixin):
         is_enc = isinstance(enc_model, tf.keras.Model)
         self.meta['params'].update(is_model=is_model, is_ae=is_ae, is_enc=is_enc)
 
-        # if trustscore object path is provided,use it
+        # if trustscore object path is provided, use it
         if isinstance(trustscore, str):
             self.trustscore = load_object(trustscore)
         else:
+            print('no trustscore file used, building KDtree...')
             self.trustscore = None
 
         # if session provided, use it

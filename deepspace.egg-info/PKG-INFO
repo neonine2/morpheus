@@ -6,6 +6,7 @@ Home-page: https://github.com/neonine2/deepSpace
 Author: Zitong Wang
 Author-email: zwang2@caltech.edu
 License: Apache 2.0
+Platform: UNKNOWN
 Classifier: Intended Audience :: Science/Research
 Classifier: Operating System :: OS Independent
 Classifier: Programming Language :: Python :: 3
@@ -282,3 +283,5 @@ BibTeX entry:
   url     = {http://jmlr.org/papers/v22/21-0017.html}
 }
 ```
+
+

@@ -34,30 +34,23 @@ def load_object(filename):
         return pickle.load(outp)
 
 def add_init_layer(patch, mu, sigma, orig_mean, model, ml_framework='tf'):
-    orig_mean = np.float32(orig_mean)
+    # orig_mean = np.float32(orig_mean)
     if len(patch.shape) > 3:
         _,H,W,C = patch.shape
     else:
         H,W,C = 1,1,patch.shape[-1]
+
     new_weights = np.zeros((C*H*W,C))
     for c_ind in range(C):
         start = (H*W)*c_ind
         fin = (H*W)*(c_ind+1)
         new_weights[start:fin,c_ind] = 1
-        # new_weights[start:fin,c_ind] = max(1,)
-    
-    newInput = tf.keras.Input(shape=(C,))
-    #incorporate mu ensures that the minimum value
-    # bias = (patch-minVal-orig_mean).flatten()
-    # x = tf.keras.layers.Dense(C*H*W, kernel_initializer=tf.constant_initializer(new_weights),
-                        # bias_initializer=tf.constant_initializer(bias),activation='relu')(newInput)
-    # x = tf.keras.layers.Dense(C*H*W, kernel_initializer=tf.keras.initializers.Identity(),
-                        # bias_initializer=tf.constant_initializer(np.tile(minVal, H*W)))(x)
     def alter_image(y):
-        return ((tf.math.minimum(1.0, (y*sigma + mu)/(orig_mean*sigma + mu))
+            return ((tf.math.minimum(1.0, (y*sigma + mu)/(orig_mean*sigma + mu))
                  *((patch*sigma + mu)+
                    tf.math.maximum(0.0, (y*sigma + mu)-(orig_mean*sigma + mu))))
                    -mu)/sigma
+    newInput = tf.keras.Input(shape=(C,))
     x = tf.keras.layers.Lambda(alter_image)(newInput)
     input_transform = tf.keras.Model(newInput, x)
     if ml_framework != 'pytorch':
@@ -148,7 +141,7 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, optim
 
     # Set range of each channel to perturb
     isPerturbed = np.array([True if name in channel_to_perturb else False for name in channel])
-    feature_range = ((0*np.ones(C) - mu)/sigma,(1e10*np.ones(C) - mu)/sigma)
+    feature_range = ((0*np.ones(C) - mu)/sigma,(1e2*np.ones(C) - mu)/sigma)
     feature_range[0][~isPerturbed] = X_mean_normed[~isPerturbed]-1e-20
     feature_range[1][~isPerturbed] = X_mean_normed[~isPerturbed]+1e-20
     # maxVal = mean_skipfew(np.max, X_normed, preserveAxis=X_normed.ndim-1)

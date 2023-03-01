@@ -33,12 +33,12 @@ def load_object(filename):
     with open(filename, 'rb') as outp: 
         return pickle.load(outp)
 
-def add_init_layer(patch, orig_mean, model, ml_framework='tf'):
+def add_init_layer(patch, mu, sigma, orig_mean, model, ml_framework='tf'):
     orig_mean = np.float32(orig_mean)
     if len(patch.shape) > 3:
         _,H,W,C = patch.shape
     else:
-        _,H,W,C = 1,1,patch.shape[-1]
+        H,W,C = 1,1,patch.shape[-1]
     new_weights = np.zeros((C*H*W,C))
     for c_ind in range(C):
         start = (H*W)*c_ind
@@ -53,11 +53,12 @@ def add_init_layer(patch, orig_mean, model, ml_framework='tf'):
                         # bias_initializer=tf.constant_initializer(bias),activation='relu')(newInput)
     # x = tf.keras.layers.Dense(C*H*W, kernel_initializer=tf.keras.initializers.Identity(),
                         # bias_initializer=tf.constant_initializer(np.tile(minVal, H*W)))(x)
-    if H > 1 or W > 1:
-        def alter_image(y):
-            return tf.math.divide(tf.math.minimum(orig_mean, y), orig_mean)*(patch+tf.math.maximum(0.0, y-orig_mean))
-        x = tf.keras.layers.Lambda(alter_image)(newInput)
-        # x = tf.keras.layers.Reshape((H, W, C))(x)
+    def alter_image(y):
+        return ((tf.math.minimum(1.0, (y*sigma + mu)/(orig_mean*sigma + mu))
+                 *((patch*sigma + mu)+
+                   tf.math.maximum(0.0, (y*sigma + mu)-(orig_mean*sigma + mu))))
+                   -mu)/sigma
+    x = tf.keras.layers.Lambda(alter_image)(newInput)
     input_transform = tf.keras.Model(newInput, x)
     if ml_framework != 'pytorch':
         newOutputs = model(x)
@@ -94,15 +95,7 @@ def load_trained_model(model_path, ml_framework):
 
 def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, optimization_params=dict(), 
                 SAVE=False, save_dir=None, patch_id=None):
-
-    # Obtain data features
-    # X_train = data_dict['X_train']
-    channel = np.array(data_dict['channel'])
-    sigma = data_dict['stdev']
-    mu = data_dict['mean']
-    C = X_orig.shape[-1]
-    X_orig_mean = np.mean(X_orig,axis=(0,1))
-
+    
     # For MLP, make sure to average across each channel, # for CNNs, make sure to adjust input shape
     model_name = model_path.split(os.sep)[-1]
     model_arch = model_name.split('.')[0].lower()
@@ -111,20 +104,32 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, optim
         ml_framework = 'tensorflow'
     else:
         ml_framework = 'pytorch'
+
+    # Obtain data features
+    channel = np.array(data_dict['channel'])
+    sigma = data_dict['stdev']
+    mu = data_dict['mean']
+    C = X_orig.shape[-1]
+
+    # Change image shape
+    input_shape = (32,32)
+    resize_fn = tf.keras.layers.Resizing(input_shape[0], input_shape[1], interpolation='nearest')
+    X_orig = resize_fn(X_orig).numpy()
     if model_arch == 'mlp':
-        X_orig = X_orig_mean
-        # X_train = np.mean(X_train,axis=(1,2))
-    elif model_arch == 'resnet':
-        model_input_shape = (None,32,32,37)
-        if X_orig.shape != model_input_shape[1:]:
-            resize_fn = tf.keras.layers.Resizing(model_input_shape[1], model_input_shape[2], interpolation='nearest')
-            # X_train = resize_fn(X_train).numpy()
-            X_orig = resize_fn(X_orig).numpy()
-    
-    #normalize data
-    # X_train = (X_train - mu) / sigma
+        X_orig = np.mean(X_orig,axis=(0,1))
     X_normed = (X_orig - mu) / sigma
-    X_mean_normed = (X_orig_mean - mu) / sigma
+    X_mean_normed = mean_skipfew(np.mean, X_normed, preserveAxis=X_normed.ndim-1)
+    if optimization_params['trustscore'] is None:
+        if 'X_train' in data_dict:
+            X_train = resize_fn(data_dict['X_train']).numpy()
+        else:
+            ts = load_object(os.path.join(os.path.dirname(os.path.dirname(model_path)),
+                                               'cf','trustscore.pkl'))
+            X_train,_,_,_ = ts.kdtrees[0].get_arrays()
+            X_train = X_train.reshape(X_train.shape[0],32,32,37)
+        X_train = (X_train - mu) / sigma
+        if model_arch == 'mlp':
+            X_train = mean_skipfew(np.mean, X_train, preserveAxis=(0,X_train.ndim-1))
     
     # initialize model
     tf.disable_eager_execution()
@@ -135,18 +140,11 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, optim
     if pred == 1:
         print('instance already positively classified, no counterfactual needed')
         return 
-
-    #generate predicted label to build tree
-    # if ml_framework == 'pytorch':
-    #     preds = np.argmax(model(torch.from_numpy(X_train).permute(0, 3, 1, 2).float())
-    #                       .detach().numpy(), axis=1)
-    # else:
-    #     preds = model.predict(X_train)
-    #     preds = np.argmax(preds,axis=1)
     
     # Adding init layer to model
     # make sure X_orig is unnormalized when passed into add_init_layer
-    altered_model, input_transform = add_init_layer(X_normed[None,:], X_mean_normed, model, ml_framework)
+    altered_model, input_transform = add_init_layer(X_normed[None,:],  mu, sigma, 
+                                                        X_mean_normed, model, ml_framework)
 
     # Set range of each channel to perturb
     isPerturbed = np.array([True if name in channel_to_perturb else False for name in channel])
@@ -154,7 +152,6 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, optim
     feature_range[0][~isPerturbed] = X_mean_normed[~isPerturbed]-1e-20
     feature_range[1][~isPerturbed] = X_mean_normed[~isPerturbed]+1e-20
     # maxVal = mean_skipfew(np.max, X_normed, preserveAxis=X_normed.ndim-1)
-    minVal = (0-mu)/sigma
 
     # define predict function
     if ml_framework == 'pytorch':
@@ -166,15 +163,23 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, optim
    
     cf = CounterfactualProto(predict_fn, input_transform, (1,) + X_orig.shape, 
                              feature_range=feature_range, **optimization_params)
+        # generate predicted label to build tree
+    print('shape : ', X_train.shape)
+    if optimization_params['trustscore'] is None:
+        if ml_framework == 'pytorch':
+            preds = np.argmax(model(torch.from_numpy(X_train).permute(0, 3, 1, 2).float())
+                            .detach().numpy(), axis=1)
+        else:
+            preds = model.predict(X_train)
+            preds = np.argmax(preds,axis=1)
+        cf.fit(X_train, preds)
+    else:
+        cf.fit(train_data=np.array([]),preds=np.array([]))
+    
     t1 = time.time()
-    cf.fit(train_data=np.array([]),preds=np.array([]))
+    explanation = cf.explain(X=X_mean_normed[None,:], Y=y_orig[None,:], target_class=[1], verbose=True)
     t2 = time.time()
-    # do stuff
-    print(f'fit step time elapsed = {t2 - t1}')
-    # X = np.zeros([1,C]) # initialize perturbation as a zero-vector
-    explanation = cf.explain(X=X_mean_normed[None,:], Y=y_orig[None,:], target_class=[1], verbose=False)
-    t3 = time.time()
-    print(f'explain step time elapsed = {t3 - t2}')
+    print(f'explain step time elapsed = {t2 - t1}')
 
     cf_delta = None
     cf_prob = None
@@ -184,13 +189,14 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, optim
         cf = explanation.cf['X'][0]
         # cf_all = np.maximum(0,cf + X_normed - minVal - X_mean_normed) + minVal
         if X_normed.ndim>2:
-            cf = np.minimum(X_mean_normed, cf)/X_mean_normed*(X_normed+np.maximum(0.0, cf-X_mean_normed))
+            cf =((np.minimum(1.0, (cf*sigma + mu)/(X_mean_normed*sigma + mu))*
+                  ((X_normed*sigma + mu)+
+                   np.maximum(0.0, (cf*sigma + mu)-(X_mean_normed*sigma + mu))))
+                   -mu)/sigma
+        print(f"cf probability: {cf_prob}")
+        print(f"compute probability:{model.predict(cf[None,])}")
         X_perturbed = mean_skipfew(np.mean, cf*sigma+mu, preserveAxis=cf.ndim-1)
         X_orig = X_mean_normed*sigma+mu
-        
-        print(f"cf probability: {cf_prob}")
-        print(f"compute probability:{predict_fn.predict(explanation.cf['X'])}")
-        print(f"compute probability:{model.predict(cf[None,])}")
         cf_delta = (X_perturbed  - X_orig) / X_orig * 100
         print(f"cf unperturbed: {np.max(np.abs(cf_delta[~isPerturbed]))}")
         cf_perturbed = dict(zip(channel[isPerturbed],cf_delta[isPerturbed]))

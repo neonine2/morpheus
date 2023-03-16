@@ -1,7 +1,7 @@
 import os, sys, pickle
 import random 
 from pathlib import Path
-from myutils.misc import *
+from alibi.myutils.misc import *
 import pandas as pd
 
 def generate_split_from_data(DATA_NAME, metadata_path, 

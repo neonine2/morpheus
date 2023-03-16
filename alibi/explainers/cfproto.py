@@ -6,10 +6,8 @@ import _pickle as pickle
 from typing import Any, Callable, Dict, Optional, Sequence, Tuple, Union
 import numpy as np
 import tensorflow.compat.v1 as tf
-# import torch
 import time
 
-# from utils.my_models import TissueClassifier
 from tensorflow.keras import models
 
 from alibi.api.defaults import DEFAULT_DATA_CFP, DEFAULT_META_CFP
@@ -854,8 +852,8 @@ class CounterfactualProto(Explainer, FitMixin):
                 ts.fit(train_data, preds, classes=self.classes)  # type: ignore
                 self.kdtrees = ts.kdtrees
                 self.X_by_class = ts.X_kdtree
-                save_object(ts, 'trustscore.pkl')
-                print('Trustscore object saved as pickle file')
+                # save_object(ts, 'trustscore.pkl')
+                # print('Trustscore object saved as pickle file')
             else:
                 self.kdtrees = self.trustscore.kdtrees
                 self.X_by_class = self.trustscore.X_kdtree

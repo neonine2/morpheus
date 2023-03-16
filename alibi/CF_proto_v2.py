@@ -56,10 +56,17 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
     
     # Adding init layer to model
     # make sure X_orig is unnormalized when passed into add_init_layer
-    print('Modifying model')
-    def init_fun(y):
-        return alter_image(y, X_orig[None,:],mu,sigma,X_mean)
-    altered_model, input_transform = add_init_layer(X_orig[None,:],init_fun,model,ml_framework)
+    if model_arch == 'mlp':
+        altered_model = model
+        if ml_framework == 'tensorflow':
+            input_transform = tf.identity()
+        else:
+            input_transform = nn.Identity()
+    else:
+        print('Modifying model')
+        def init_fun(y):
+            return alter_image(y, X_orig[None,:],mu,sigma,X_mean)
+        altered_model, input_transform = add_init_layer(X_orig[None,:],init_fun,model,ml_framework)
 
     # Set range of each channel to perturb
     isPerturbed = np.array([True if name in channel_to_perturb 
@@ -92,9 +99,17 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
             X_train = (X_train - mu)/sigma
             # generate predicted label to build tree
             if ml_framework == 'pytorch':
-                preds = np.argmax(model(torch.permute(torch.from_numpy(X_train), (0,3,1,2)).float()).detach().numpy(), axis=1)
+                if model_arch == 'mlp':
+                    X_t = torch.from_numpy(np.mean(X_train,axis=(1,2))).float()
+                else:
+                    X_t = torch.permute(torch.from_numpy(X_train), (0,3,1,2)).float()
+                preds = np.argmax(model(X_t).detach().numpy(), axis=1)
             else:
-                preds = np.argmax(model.predict(X_train), axis=1)
+                if model_arch == 'mlp':
+                    X_t = np.mean(X_train,axis=(1,2))
+                else:
+                    X_t = X_train
+                preds = np.argmax(model.predict(X_t), axis=1)
             X_train = np.mean(X_train,axis=(1,2))
             cf.fit(X_train, preds)
         else:
@@ -118,7 +133,8 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
             cf = input_transform(cf[None,])
             if ml_framework == 'pytorch':
                 pred_proba = model(cf)
-                cf = torch.permute(cf, (0,2,3,1)).numpy()
+                if model_arch != 'mlp':
+                    cf = torch.permute(cf, (0,2,3,1)).numpy()
             else:
                 pred_proba = model.predict(cf)
         print(f"cf probability: {cf_prob}")

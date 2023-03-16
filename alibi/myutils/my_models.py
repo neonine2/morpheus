@@ -22,8 +22,6 @@ class TissueClassifier(pl.LightningModule):
             layers = list(backbone.children())[:-1]
             layers[0] = nn.Conv2d(in_channels, 64, kernel_size=(7, 7), stride=(2, 2), 
                                                     padding=(3, 3), bias=False)
-            # self.feature_extractor = nn.Sequential(*layers)
-            # self.classifier = nn.Linear(num_filters, num_target_classes)
             layers.append(nn.Flatten())
             layers.append(nn.Linear(num_filters, num_target_classes))
             layers.append(nn.Softmax())
@@ -52,6 +50,13 @@ class TissueClassifier(pl.LightningModule):
             classifier.add_module('fc', nn.Linear(img_size*img_size, num_target_classes))
             # classifier.add_module('act', nn.Softmax())
             self.predictor = nn.Sequential(*[backbone, classifier])
+        elif modelArch == 'mlp':
+            self.predictor = nn.Sequential(
+                nn.Linear(in_channels, 30),
+                nn.ReLU(),
+                nn.Linear(30, 10),
+                nn.ReLU(),
+                nn.Linear(10, num_target_classes))
 
     def forward(self, x):
         self.predictor.eval()

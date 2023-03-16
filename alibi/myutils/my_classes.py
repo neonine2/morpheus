@@ -32,24 +32,33 @@ class torchDataset(torch.utils.data.Dataset):
             label = self.target_transform(label)
         return image, label
 
-def make_torch_dataloader(data_path, img_size, params = {'batch_size': 64,'num_workers': 4,'pin_memory':True}):
+    
+def make_torch_dataloader(data_path, img_size, model='mlp',
+                          params = {'batch_size': 64,'num_workers': 4,'pin_memory':True}):
     with open(os.path.join(data_path,'data_info.pkl'), 'rb') as f:
         info_dict = pickle.load(f)
-        
-    train_transform = transforms.Compose([transforms.ToTensor(),
+    
+    if model == 'mlp':
+        train_transform = transforms.Compose([transforms.ToTensor(),
+                                            transforms.Normalize(info_dict['mean'], info_dict['stdev']), 
+                                            transforms.ConvertImageDtype(torch.float),
+                                            lambda x: torch.mean(x,dim=(1,2))])
+        transform = train_transform
+    else:
+        train_transform = transforms.Compose([transforms.ToTensor(),
+                                            transforms.Resize(img_size),
+                                            transforms.Normalize(info_dict['mean'], info_dict['stdev']), 
+                                            transforms.ConvertImageDtype(torch.float),
+                                            transforms.RandomHorizontalFlip(),
+                                            transforms.RandomVerticalFlip(),
+                                            transforms.RandomRotation(degrees=90)])
+        transform = transforms.Compose([transforms.ToTensor(),
                                         transforms.Resize(img_size),
                                         transforms.Normalize(info_dict['mean'], info_dict['stdev']), 
-                                        transforms.ConvertImageDtype(torch.float),
-                                        transforms.RandomHorizontalFlip(),
-                                        transforms.RandomVerticalFlip(),
-                                        transforms.RandomRotation(degrees=90)])
-    transform = transforms.Compose([transforms.ToTensor(),
-                                    transforms.Resize(img_size),
-                                    transforms.Normalize(info_dict['mean'], info_dict['stdev']), 
-                                    transforms.ConvertImageDtype(torch.float)])
-    training_data = torchDataset(data_path + '/train', train_transform)
-    validation_data = torchDataset(data_path + '/validate', transform)
-    testing_data = torchDataset(data_path + '/test', transform)
+                                        transforms.ConvertImageDtype(torch.float)])
+    training_data = torchDataset(data_path + '/train', transform=train_transform)
+    validation_data = torchDataset(data_path + '/validate', transform=transform)
+    testing_data = torchDataset(data_path + '/test', transform=transform)
 
     train_loader = DataLoader(training_data, shuffle= True, **params)
     val_loader = DataLoader(validation_data, shuffle= False, **params)
@@ -87,8 +96,7 @@ def make_tf_dataloader(data_path, loader_type, newShape=None, onlyMean=False):
     mu = info_dict['mean']
     stdev = info_dict['stdev']
     shape = info_dict['shape']
-    ds = tf.data.Dataset.list_files(str(os.path.join(data_path,loader_type,'*/*.npy'))
-                                          ).map(lambda x : process_path(x, shape, onlyMean))
+    ds = tf.data.Dataset.list_files(str(os.path.join(data_path,loader_type,'*/*.npy'))).map(lambda x : process_path(x, shape, onlyMean))
     if loader_type == 'train':
         toShuffle = toAugment = toRepeat = True
     else:

@@ -11,7 +11,7 @@ import tensorflow as tf
 import tensorflow_addons as tfa
 
 class TissueClassifier(pl.LightningModule):
-    def __init__(self, in_channels, img_size, modelArch, num_target_classes=2):
+    def __init__(self, in_channels, img_size=None, modelArch=None, num_target_classes=2):
         super().__init__()
         self.classes = num_target_classes
         modelArch = modelArch.lower()

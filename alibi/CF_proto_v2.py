@@ -57,11 +57,12 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
     # Adding init layer to model
     # make sure X_orig is unnormalized when passed into add_init_layer
     if model_arch == 'mlp':
-        altered_model = model
+        def altered_model(x): 
+            return torch.nn.functional.softmax(model(torch.from_numpy(x).float()),dim=1)
         if ml_framework == 'tensorflow':
             input_transform = tf.identity()
         else:
-            input_transform = nn.Identity()
+            def input_transform(x): return x
     else:
         print('Modifying model')
         def init_fun(y):
@@ -129,14 +130,16 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
         cf = explanation.cf['X'][0]
         
         print(f'compute probability: {predict_fn(cf[None,])}')
-        if X_orig.ndim>2:
-            cf = input_transform(cf[None,])
-            if ml_framework == 'pytorch':
-                pred_proba = model(cf)
-                if model_arch != 'mlp':
-                    cf = torch.permute(cf, (0,2,3,1)).numpy()
+        cf = input_transform(cf[None,])
+        if ml_framework == 'pytorch':
+            if model_arch == 'mlp':
+                pred_proba = altered_model(cf)
             else:
-                pred_proba = model.predict(cf)
+                pred_proba = model(cf)
+            if model_arch != 'mlp':
+                cf = torch.permute(cf, (0,2,3,1)).numpy()
+        else:
+            pred_proba = model.predict(cf)
         print(f"cf probability: {cf_prob}")
         print(f"compute probability: {pred_proba}")
         X_perturbed = mean_skipfew(np.mean, cf*sigma+mu, preserveAxis=cf.ndim-1)

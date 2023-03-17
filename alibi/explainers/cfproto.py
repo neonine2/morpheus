@@ -852,8 +852,8 @@ class CounterfactualProto(Explainer, FitMixin):
                 ts.fit(train_data, preds, classes=self.classes)  # type: ignore
                 self.kdtrees = ts.kdtrees
                 self.X_by_class = ts.X_kdtree
-                # save_object(ts, 'trustscore.pkl')
-                # print('Trustscore object saved as pickle file')
+                save_object(ts, 'trustscore.pkl')
+                print('Trustscore object saved as pickle file')
             else:
                 self.kdtrees = self.trustscore.kdtrees
                 self.X_by_class = self.trustscore.X_kdtree

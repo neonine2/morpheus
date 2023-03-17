@@ -12,10 +12,10 @@ import torch
 def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
                  X_train_path=None, optimization_params=dict(), SAVE=False, save_dir=None, patch_id=None):
     model_name = model_path.split(os.sep)[-1]
-    model_arch = model_name.split('.')[0].lower()
     model_ext = model_name.split('.')[1].lower()
     if model_ext == 'h5':
         ml_framework = 'tensorflow'
+        model_arch = model_name.split('.')[0].lower()
     elif model_ext == 'ckpt':
         ml_framework = 'pytorch'
         model_arch = model_path.split(os.sep)[-5]

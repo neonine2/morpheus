@@ -49,9 +49,9 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
     print('Loading model')
     # model = load_trained_model(model_path, **model_params)
     model = TissueClassifier.load_from_checkpoint(model_path, 
-                                              in_channels=C,
-                                              img_size=(H,W),
-                                              modelArch=model_arch)
+                                                in_channels=C,
+                                                img_size=H,
+                                                modelArch=model_arch)
     model.eval()
     
     # Adding init layer to model
@@ -65,8 +65,10 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
             def input_transform(x): return x
     else:
         print('Modifying model')
+        unnormed_mean = X_mean*sigma+mu
+        unnormed_patch = X_orig[None,:]*sigma+mu
         def init_fun(y):
-            return alter_image(y, X_orig[None,:],mu,sigma,X_mean)
+            return alter_image(y, unnormed_patch, mu, sigma, unnormed_mean)
         altered_model, input_transform = add_init_layer(X_orig[None,:],init_fun,model,ml_framework)
 
     # Set range of each channel to perturb
@@ -164,13 +166,18 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
                                 channel_to_perturb=channel_to_perturb)
     return
 
-def alter_image(y, patch, mu, sigma, orig_mean):
-    unnormed_mean = orig_mean*sigma + mu
+# def alter_image(y, patch, mu, sigma, orig_mean):
+#     unnormed_mean = orig_mean*sigma + mu
+#     unnormed_y = y*sigma + mu
+#     unnormed_patch = patch*sigma + mu
+#     a = np.minimum(1.0, unnormed_y/unnormed_mean)
+#     b = np.maximum(0.0, unnormed_y-unnormed_mean)
+#     new_patch = a[:,None,None,:]*(unnormed_patch+b[:,None,None,:])
+#     return (new_patch-mu)/sigma
+
+def alter_image(y, unnormed_patch, mu, sigma, unnormed_mean):
     unnormed_y = y*sigma + mu
-    unnormed_patch = patch*sigma + mu
-    a = np.minimum(1.0, unnormed_y/unnormed_mean)
-    b = np.maximum(0.0, unnormed_y-unnormed_mean)
-    new_patch = a[:,None,None,:]*(unnormed_patch+b[:,None,None,:])
+    new_patch = unnormed_patch*((unnormed_y/unnormed_mean)[:,None,None,:])
     return (new_patch-mu)/sigma
 
 def load_object(filename):

@@ -6,18 +6,17 @@ import pandas as pd
 
 def generate_split_from_data(DATA_NAME, metadata_path, 
                              param = {'eps':0.01, "train_lb":0.65, "split_ratio":[0.65,0.15,0.2]}):
-    rawdata_path = os.path.join(os.path.expanduser('~/IMC/processed_data'),DATA_NAME+'.dat')
-    output_path = os.path.join(os.path.expanduser('~/IMC/jupyter_notebook/output'),DATA_NAME)
-
+    output_path = os.path.expanduser(f'~/IMC/output/{DATA_NAME}')
+    rawdata_path = f'{output_path}/{DATA_NAME}.dat'
+    
     # split data and save to splitdata_path
-    if os.path.isdir(output_path):
-        if len(os.listdir(output_path))==0:
-            stratified_data_split(rawdata_path, metadata_path, output_path, **param)
-        else:
-            print("Data directory is already filled")
-    else:
+    if not os.path.isdir(output_path):
         os.makedirs(output_path)
         print("Given data directory created")
+    if len(os.listdir(output_path))<=3:
+        stratified_data_split(rawdata_path, metadata_path, output_path, **param)
+    else:
+        print("Data directory is already filled")
     return output_path
 
 def stratified_data_split(data_path, metadata_path, splitdata_path, split_ratio=[0.6,0.2,0.2], 
@@ -97,12 +96,12 @@ def stratified_data_split(data_path, metadata_path, splitdata_path, split_ratio=
         tr_va_diff = abs(y_train_mean - y_val_mean)
 
         # if sample conditions satisfied, save split
-        print("""Train sample prop: {} \nValidation sample prop: {} \nTest sample prop: {} 
+        if sample_cond(tr_te_diff, tr_va_diff, tr_prop, eps, train_lb):
+            print('Balanced data splitting done with conditions satisfied!')
+            print("""Train sample prop: {} \nValidation sample prop: {} \nTest sample prop: {} 
             \nNumber of test patient: {} \nTrain class prop: {}  \nValid class prop: {} \nTest class prop: {}"""
                 .format(tr_prop, X_val.shape[0]/intensity.shape[0],X_test.shape[0]/intensity.shape[0],
                         len(test_pat), y_train_mean, y_val_mean, y_test_mean))
-        if sample_cond(tr_te_diff, tr_va_diff, tr_prop, eps, train_lb):
-            print('Balanced data splitting done with conditions satisfied!')
             mu = np.mean(X_train,axis=(0,1,2))
             std = np.std(X_train,axis=(0,1,2))
             data_dict = {"channel":channel, "patient_df":pat_df, 

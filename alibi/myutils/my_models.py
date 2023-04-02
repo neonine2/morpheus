@@ -86,6 +86,10 @@ class TissueClassifier(pl.LightningModule):
     def test_step(self, test_batch, batch_idx):
         metric_dict=self.execute_and_get_metric(test_batch, 'test')
         self.log_dict(metric_dict, prog_bar=True)
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
+        return optimizer
  
 
 METRICS = [ 

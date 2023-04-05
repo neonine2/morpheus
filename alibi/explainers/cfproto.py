@@ -138,6 +138,7 @@ class CounterfactualProto(Explainer, FitMixin):
         self.meta['params'].update(params)
 
         self.predict = predict
+        self.trustscore = trustscore
 
         # check if the passed object is a model and get session
         is_model = isinstance(predict, tf.keras.Model)
@@ -145,13 +146,6 @@ class CounterfactualProto(Explainer, FitMixin):
         is_ae = isinstance(ae_model, tf.keras.Model)
         is_enc = isinstance(enc_model, tf.keras.Model)
         self.meta['params'].update(is_model=is_model, is_ae=is_ae, is_enc=is_enc)
-
-        # if trustscore object path is provided, use it
-        if isinstance(trustscore, str):
-            self.trustscore = load_object(trustscore)
-        else:
-            print('no trustscore file used, building KDtree...')
-            self.trustscore = None
 
         # if session provided, use it
         if isinstance(sess, tf.Session):
@@ -842,7 +836,8 @@ class CounterfactualProto(Explainer, FitMixin):
                 self.class_enc[i] = enc_data[idx]
         elif self.use_kdtree:
             logger.warning('No encoder specified. Using k-d trees to represent class prototypes.')
-            if self.trustscore is None:
+            if not os.path.exists(self.trustscore):
+                print('no trustscore file used, building KDtree...')
                 if trustscore_kwargs is not None:
                     ts = TrustScore(**trustscore_kwargs)
                 else:
@@ -852,11 +847,12 @@ class CounterfactualProto(Explainer, FitMixin):
                 ts.fit(train_data, preds, classes=self.classes)  # type: ignore
                 self.kdtrees = ts.kdtrees
                 self.X_by_class = ts.X_kdtree
-                save_object(ts, 'trustscore.pkl')
+                save_object(ts, self.trustscore)
                 print('Trustscore object saved as pickle file')
             else:
-                self.kdtrees = self.trustscore.kdtrees
-                self.X_by_class = self.trustscore.X_kdtree
+                ts = load_object(self.trustscore)
+                self.kdtrees = ts.kdtrees
+                self.X_by_class = ts.X_kdtree
             
 
         return self

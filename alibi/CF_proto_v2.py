@@ -28,8 +28,10 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
     mu = data_dict['mean']
     H, W, C = X_orig.shape
 
-    if optimization_params['trustscore'] is None:
-        X_train = np.load(X_train_path)
+    # if not os.path.exists(optimization_params['trustscore']):
+    X_train = np.load(X_train_path)
+    X_train_mean = np.mean(X_train,axis=(1,2))
+    fano = np.std(X_train_mean,axis=0)/np.mean(X_train_mean,axis=0)
     # Change image shape
     if ml_framework == 'tensorflow':
         #all tensorflow networks take 32 by 32 images
@@ -37,9 +39,9 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
         resize_fn = tf.keras.layers.Resizing(input_shape[0], input_shape[1], interpolation='nearest')
         X_orig = resize_fn(X_orig).numpy()
         X_train = resize_fn(X_train)
-    
     X_orig = (X_orig - mu)/sigma
     X_mean = np.mean(X_orig,axis=(0,1))
+    
     if model_arch == 'mlp':
         X_orig = X_mean
         
@@ -56,6 +58,7 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
     
     # Adding init layer to model
     # make sure X_orig is unnormalized when passed into add_init_layer
+    unnormed_mean = X_mean*sigma+mu
     if model_arch == 'mlp':
         def altered_model(x): 
             return torch.nn.functional.softmax(model(torch.from_numpy(x).float()),dim=1)
@@ -65,7 +68,6 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
             def input_transform(x): return x
     else:
         print('Modifying model')
-        unnormed_mean = X_mean*sigma+mu
         unnormed_patch = X_orig[None,:]*sigma+mu
         def init_fun(y):
             return alter_image(y, unnormed_patch, mu, sigma, unnormed_mean)
@@ -74,7 +76,7 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
     # Set range of each channel to perturb
     isPerturbed = np.array([True if name in channel_to_perturb 
                             else False for name in channel])
-    feature_range = ((0*np.ones(C) - mu)/sigma,(1e2*np.ones(C) - mu)/sigma)
+    feature_range = ((0*np.ones(C) - mu)/sigma,((unnormed_mean*fano*3) - mu)/sigma)
     feature_range[0][~isPerturbed] = X_mean[~isPerturbed]-1e-20
     feature_range[1][~isPerturbed] = X_mean[~isPerturbed]+1e-20
 
@@ -97,26 +99,23 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
                              **optimization_params)
 
     print('Building kdtree')
-    if optimization_params['trustscore'] is None:
-        if X_train is not None:
-            X_train = (X_train - mu)/sigma
-            # generate predicted label to build tree
-            if ml_framework == 'pytorch':
-                if model_arch == 'mlp':
-                    X_t = torch.from_numpy(np.mean(X_train,axis=(1,2))).float()
-                else:
-                    X_t = torch.permute(torch.from_numpy(X_train), (0,3,1,2)).float()
-                preds = np.argmax(model(X_t).detach().numpy(), axis=1)
+    if not os.path.exists(optimization_params['trustscore']):
+        X_train = (X_train - mu)/sigma
+        # generate predicted label to build tree
+        if ml_framework == 'pytorch':
+            if model_arch == 'mlp':
+                X_t = torch.from_numpy(np.mean(X_train,axis=(1,2))).float()
             else:
-                if model_arch == 'mlp':
-                    X_t = np.mean(X_train,axis=(1,2))
-                else:
-                    X_t = X_train
-                preds = np.argmax(model.predict(X_t), axis=1)
-            X_train = np.mean(X_train,axis=(1,2))
-            cf.fit(X_train, preds)
+                X_t = torch.permute(torch.from_numpy(X_train), (0,3,1,2)).float()
+            preds = np.argmax(model(X_t).detach().numpy(), axis=1)
         else:
-            print('need training data')
+            if model_arch == 'mlp':
+                X_t = np.mean(X_train,axis=(1,2))
+            else:
+                X_t = X_train
+            preds = np.argmax(model.predict(X_t), axis=1)
+        X_train = np.mean(X_train,axis=(1,2))
+        cf.fit(X_train, preds)
     else:
         cf.fit()
     
@@ -147,7 +146,7 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
         X_perturbed = mean_skipfew(np.mean, cf*sigma+mu, preserveAxis=cf.ndim-1)
         X_orig = X_mean*sigma+mu
         cf_delta = (X_perturbed  - X_orig) / X_orig * 100
-        print(f"cf unperturbed: {np.max(np.abs(cf_delta[~isPerturbed]))}")
+        # print(f"cf unperturbed: {np.max(np.abs(cf_delta[~isPerturbed]))}")
         cf_perturbed = dict(zip(channel[isPerturbed],cf_delta[isPerturbed]))
         print(f"cf perturbed: {cf_perturbed}")
 
@@ -161,7 +160,6 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
                     os.makedirs(save_dir)
             savedFile = os.path.join(save_dir, "patch_{}.npz".format(patch_id))
             np.savez(savedFile, explanation=explanation,
-                                cf_delta=cf_delta,
                                 cf_perturbed=cf_perturbed,
                                 channel_to_perturb=channel_to_perturb)
     return

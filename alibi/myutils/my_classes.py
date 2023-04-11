@@ -38,15 +38,17 @@ def make_torch_dataloader(data_path, img_size, model='mlp',
     with open(os.path.join(data_path,'data_info.pkl'), 'rb') as f:
         info_dict = pickle.load(f)
     
-    if model == 'mlp':
+    if model != 'unet':
         train_transform = transforms.Compose([transforms.ToTensor(),
-                                            transforms.Normalize(info_dict['mean'], info_dict['stdev']), 
-                                            transforms.ConvertImageDtype(torch.float),
+                                              transforms.Lambda(torch.log1p),
+                                              transforms.Normalize(info_dict['mean'], info_dict['stdev']), 
+                                              transforms.ConvertImageDtype(torch.float),
                                             lambda x: torch.mean(x,dim=(1,2))])
         transform = train_transform
     else:
         train_transform = transforms.Compose([transforms.ToTensor(),
                                             transforms.Resize(img_size),
+                                            transforms.Lambda(torch.log1p),
                                             transforms.Normalize(info_dict['mean'], info_dict['stdev']), 
                                             transforms.ConvertImageDtype(torch.float),
                                             transforms.RandomHorizontalFlip(),
@@ -54,6 +56,7 @@ def make_torch_dataloader(data_path, img_size, model='mlp',
                                             transforms.RandomRotation(degrees=90)])
         transform = transforms.Compose([transforms.ToTensor(),
                                         transforms.Resize(img_size),
+                                        transforms.Lambda(torch.log1p),
                                         transforms.Normalize(info_dict['mean'], info_dict['stdev']), 
                                         transforms.ConvertImageDtype(torch.float)])
     training_data = torchDataset(data_path + '/train', transform=train_transform)

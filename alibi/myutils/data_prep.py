@@ -3,6 +3,17 @@ import random
 from pathlib import Path
 from alibi.myutils.misc import *
 import pandas as pd
+from pprint import pprint
+
+def describe_data_split(output_path):
+    y_mean = {}
+    pat = np.load(output_path+f"/data_info.pkl", allow_pickle=True)['patient_df']
+    for group in ['train','validate','test']:
+        data = pd.read_csv(output_path+f"/{group}/label.csv")
+        n_pat = len(pat[pat['ImageNumber'].isin(data['ImageNumber'])])
+        y = data['Tcytotoxic'].mean()
+        y_mean.update({group:[round(y,3), len(data), n_pat]})
+    return y_mean
 
 def generate_split_from_data(DATA_NAME, metadata_path, 
                              param = {'eps':0.01, "train_lb":0.65, "split_ratio":[0.65,0.15,0.2]}):
@@ -16,7 +27,8 @@ def generate_split_from_data(DATA_NAME, metadata_path,
     if len(os.listdir(output_path))<=3:
         stratified_data_split(rawdata_path, metadata_path, output_path, **param)
     else:
-        print("Data directory is already filled")
+        print("Data directory is already filled with the following split:")
+        pprint(describe_data_split(output_path))
     return output_path
 
 def stratified_data_split(data_path, metadata_path, splitdata_path, split_ratio=[0.6,0.2,0.2], 

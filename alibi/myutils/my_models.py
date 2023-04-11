@@ -57,6 +57,9 @@ class TissueClassifier(pl.LightningModule):
                 nn.Linear(30, 10),
                 nn.ReLU(),
                 nn.Linear(10, num_target_classes))
+        elif modelArch == 'lr':
+            self.predictor = nn.Sequential(
+                nn.Linear(in_channels, num_target_classes))
 
     def forward(self, x):
         self.predictor.eval()

@@ -87,10 +87,11 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
         predict_fn = lambda x : altered_model.predict(x)
     
     print('check instance')
-    # Terminate if model incorrectly classifies patch as having T cells
+    # Terminate if model incorrectly classifies patch as the target class
+    target_class = optimization_params.pop('target_class')
     pred = np.argmax(predict_fn(X_mean[None,]))
-    if pred == 1:
-        print('instance already positively classified, no counterfactual needed')
+    if pred == target_class:
+        print('instance already classified as target class, no counterfactual needed')
         return 
     
     shape = (1,) + X_orig.shape
@@ -122,7 +123,7 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
     print('kdtree built!')
     t1 = time.time()
     explanation = cf.explain(X=X_mean[None,:], Y=y_orig[None,:], 
-                             target_class=[1], verbose=False)
+                             target_class=[target_class], verbose=False)
     t2 = time.time()
     print(f'explain step time elapsed = {t2 - t1}')
 

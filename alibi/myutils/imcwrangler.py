@@ -45,6 +45,7 @@ def patch_to_pixel(df, width, height, pixel_dim):
     df = df.copy(deep=True)
     df.loc[:,'Location_Center_X'] = df['Location_Center_X']-df['x0']
     df.loc[:,'Location_Center_Y'] = df['Location_Center_Y']-df['y0']
+    
     # assign new ImageNumber such that each patch is now considered a unique image
     val = (df['ImageNumber']-1)*(df['PatchNumber'].max()+1) + df['PatchNumber']
     df['original_ImageNumber'] = df['ImageNumber']
@@ -61,12 +62,11 @@ def patch_to_matrix(df, width, height, typeName, celltype, genelist, channel_to_
     genes_to_keep = [gene for gene in genelist if gene not in set(channel_to_remove)]
     df = df[['ImageNumber','PatchNumber','original_ImageNumber']+genes_to_keep+celltype]
     nchannel = len(genes_to_keep)
-
+    label = df.groupby(['ImageNumber']).max()[celltype]
+    
     groupedpixel = df.groupby(['ImageNumber','PatchNumber'])
     groupedsum = groupedpixel.sum()
     groupedsum['original_ImageNumber'] = groupedpixel.mean()['original_ImageNumber']
-    label = df.groupby(['ImageNumber']).max()[celltype]
-    
     groupedsum = groupedsum.reset_index()
     groupedimage = groupedsum.groupby(['ImageNumber'])
     list_of_image = [v for k, v in groupedimage]

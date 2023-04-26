@@ -40,24 +40,24 @@ def make_torch_dataloader(data_path, img_size, model='mlp',
     
     if model != 'unet':
         train_transform = transforms.Compose([transforms.ToTensor(),
-                                              transforms.Lambda(torch.log1p),
                                               transforms.Normalize(info_dict['mean'], info_dict['stdev']), 
+                                            #   transforms.Lambda(torch.asinh),
                                               transforms.ConvertImageDtype(torch.float),
                                             lambda x: torch.mean(x,dim=(1,2))])
         transform = train_transform
     else:
         train_transform = transforms.Compose([transforms.ToTensor(),
                                             transforms.Resize(img_size),
-                                            transforms.Lambda(torch.log1p),
-                                            transforms.Normalize(info_dict['mean'], info_dict['stdev']), 
+                                            transforms.Normalize(info_dict['mean'], info_dict['stdev']),
+                                            # transforms.Lambda(torch.asinh),
                                             transforms.ConvertImageDtype(torch.float),
                                             transforms.RandomHorizontalFlip(),
                                             transforms.RandomVerticalFlip(),
                                             transforms.RandomRotation(degrees=90)])
         transform = transforms.Compose([transforms.ToTensor(),
                                         transforms.Resize(img_size),
-                                        transforms.Lambda(torch.log1p),
-                                        transforms.Normalize(info_dict['mean'], info_dict['stdev']), 
+                                        transforms.Normalize(info_dict['mean'], info_dict['stdev']),
+                                        # transforms.Lambda(torch.asinh),
                                         transforms.ConvertImageDtype(torch.float)])
     training_data = torchDataset(data_path + '/train', transform=train_transform)
     validation_data = torchDataset(data_path + '/validate', transform=transform)

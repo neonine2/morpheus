@@ -76,7 +76,7 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
     # Set range of each channel to perturb
     isPerturbed = np.array([True if name in channel_to_perturb 
                             else False for name in channel])
-    feature_range = ((0*np.ones(C) - mu)/sigma,((unnormed_mean*fano*3) - mu)/sigma)
+    feature_range = ((0*np.ones(C) - mu)/sigma,((unnormed_mean*fano*5) - mu)/sigma)
     feature_range[0][~isPerturbed] = X_mean[~isPerturbed]-1e-20
     feature_range[1][~isPerturbed] = X_mean[~isPerturbed]+1e-20
 

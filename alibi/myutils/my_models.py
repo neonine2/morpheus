@@ -3,12 +3,12 @@ from torch import nn
 from torch.nn import functional as F
 
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import TQDMProgressBar
+# from pytorch_lightning.callbacks import TQDMProgressBar
 import torchmetrics.functional.classification as tfcl
 
 import torchvision as tv
-import tensorflow as tf
-import tensorflow_addons as tfa
+# import tensorflow as tf
+# import tensorflow_addons as tfa
 
 class TissueClassifier(pl.LightningModule):
     def __init__(self, in_channels, img_size=None, modelArch=None, num_target_classes=2):
@@ -93,61 +93,6 @@ class TissueClassifier(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
         return optimizer
- 
-
-METRICS = [ 
-        tf.keras.metrics.BinaryAccuracy(name='accuracy'),
-        tf.keras.metrics.Precision(name='precision', class_id=1),
-        tf.keras.metrics.Recall(name='recall', class_id=1),
-        tf.keras.metrics.AUC(name='auc', curve='ROC'), # area under ROC curve
-        tf.keras.metrics.AUC(name='prc', curve='PR'), # area under precision-recall curve
-        tfa.metrics.MatthewsCorrelationCoefficient(name='MCC', num_classes=2),
-        tfa.metrics.F1Score(name='F1_score', num_classes=2),
-    ]
-
-def make_model(model_arch, input_shape, num_classes=2, metrics=METRICS):
-    model_arch = model_arch.lower()
-    if model_arch == 'cnn':
-        model = tf.keras.models.Sequential()
-        model.add(tf.keras.layers.Conv2D(filters=64, kernel_size=(3,3), activation='relu', 
-                                         input_shape=input_shape))
-        model.add(tf.keras.layers.MaxPooling2D(pool_size=(2,2),strides=(2,2)))
-        model.add(tf.keras.layers.Conv2D(filters=128, kernel_size=(3,3), activation='relu'))
-        model.add(tf.keras.layers.Dropout(0.3))
-        model.add(tf.keras.layers.Flatten())
-        model.add(tf.keras.layers.Dense(units=60, activation='relu', 
-                                        kernel_constraint=tf.keras.constraints.MaxNorm(3)))
-        model.add(tf.keras.layers.Dropout(0.8))
-        model.add(tf.keras.layers.Dense(num_classes, activation='softmax'))
-    elif model_arch == 'resnet':
-        model = tf.keras.applications.resnet50.ResNet50(include_top=True,
-                                                        weights=None,                            
-                                                        input_shape=input_shape,              
-                                                        classes=num_classes)
-    elif model_arch == 'mlp':
-        model = tf.keras.models.Sequential()
-        model.add(tf.keras.layers.Dense(units=30, activation='relu', input_shape=input_shape))
-        model.add(tf.keras.layers.Dense(units=10, activation='relu'))
-        model.add(tf.keras.layers.Dense(units=num_classes, activation='softmax'))
-    else:
-        print('model architecture selected is not available!')
-        return None
-    optimizer = tf.keras.optimizers.SGD(learning_rate=0.001, nesterov=True, momentum=0.9)
-    model.compile(optimizer=optimizer, 
-                         loss=tf.keras.losses.BinaryCrossentropy(), 
-                         metrics=metrics)
-    return model
-
-def get_prediction(model, data_loader):
-    m = nn.Softmax(dim=1)
-    pred = []
-    label = []
-    for x, y in iter(data_loader):
-        pred.append(m(model(x))[:,1])
-        label.append(y)
-    pred = torch.cat(pred, dim=0)
-    label = torch.cat(label, dim=0)
-    return pred, label
 
 def log_metrics(mode, preds, target):
     # classification metrics
@@ -170,3 +115,57 @@ def log_metrics(mode, preds, target):
                    mode+'_acc':test_acc}
     return metric_dict
     
+def get_prediction(model, data_loader):
+    m = nn.Softmax(dim=1)
+    pred = []
+    label = []
+    for x, y in iter(data_loader):
+        pred.append(m(model(x))[:,1])
+        label.append(y)
+    pred = torch.cat(pred, dim=0)
+    label = torch.cat(label, dim=0)
+    return pred, label
+
+# METRICS = [ 
+#         tf.keras.metrics.BinaryAccuracy(name='accuracy'),
+#         tf.keras.metrics.Precision(name='precision', class_id=1),
+#         tf.keras.metrics.Recall(name='recall', class_id=1),
+#         tf.keras.metrics.AUC(name='auc', curve='ROC'), # area under ROC curve
+#         tf.keras.metrics.AUC(name='prc', curve='PR'), # area under precision-recall curve
+#         tfa.metrics.MatthewsCorrelationCoefficient(name='MCC', num_classes=2),
+#         tfa.metrics.F1Score(name='F1_score', num_classes=2),
+#     ]
+
+# def make_model(model_arch, input_shape, num_classes=2, metrics=METRICS):
+#     model_arch = model_arch.lower()
+#     if model_arch == 'cnn':
+#         model = tf.keras.models.Sequential()
+#         model.add(tf.keras.layers.Conv2D(filters=64, kernel_size=(3,3), activation='relu', 
+#                                          input_shape=input_shape))
+#         model.add(tf.keras.layers.MaxPooling2D(pool_size=(2,2),strides=(2,2)))
+#         model.add(tf.keras.layers.Conv2D(filters=128, kernel_size=(3,3), activation='relu'))
+#         model.add(tf.keras.layers.Dropout(0.3))
+#         model.add(tf.keras.layers.Flatten())
+#         model.add(tf.keras.layers.Dense(units=60, activation='relu', 
+#                                         kernel_constraint=tf.keras.constraints.MaxNorm(3)))
+#         model.add(tf.keras.layers.Dropout(0.8))
+#         model.add(tf.keras.layers.Dense(num_classes, activation='softmax'))
+#     elif model_arch == 'resnet':
+#         model = tf.keras.applications.resnet50.ResNet50(include_top=True,
+#                                                         weights=None,                            
+#                                                         input_shape=input_shape,              
+#                                                         classes=num_classes)
+#     elif model_arch == 'mlp':
+#         model = tf.keras.models.Sequential()
+#         model.add(tf.keras.layers.Dense(units=30, activation='relu', input_shape=input_shape))
+#         model.add(tf.keras.layers.Dense(units=10, activation='relu'))
+#         model.add(tf.keras.layers.Dense(units=num_classes, activation='softmax'))
+#     else:
+#         print('model architecture selected is not available!')
+#         return None
+#     optimizer = tf.keras.optimizers.SGD(learning_rate=0.001, nesterov=True, momentum=0.9)
+#     model.compile(optimizer=optimizer, 
+#                          loss=tf.keras.losses.BinaryCrossentropy(), 
+#                          metrics=metrics)
+#     return model
+

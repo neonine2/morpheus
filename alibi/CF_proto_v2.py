@@ -42,14 +42,14 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
     X_orig = (X_orig - mu)/sigma
     X_mean = np.mean(X_orig,axis=(0,1))
     
+    
     if model_arch == 'mlp':
         X_orig = X_mean
         
     # initialize model
     tf.disable_eager_execution()
-    # model_params = {'ml_framework':ml_framework, 'in_channels':C, 'img_size':(H,W), 'modelArch':model_arch}
+
     print('Loading model')
-    # model = load_trained_model(model_path, **model_params)
     model = TissueClassifier.load_from_checkpoint(model_path, 
                                                 in_channels=C,
                                                 img_size=H,
@@ -59,6 +59,7 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
     # Adding init layer to model
     # make sure X_orig is unnormalized when passed into add_init_layer
     unnormed_mean = X_mean*sigma+mu
+    print(unnormed_mean)
     if model_arch == 'mlp':
         def altered_model(x): 
             return torch.nn.functional.softmax(model(torch.from_numpy(x).float()),dim=1)
@@ -76,7 +77,7 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
     # Set range of each channel to perturb
     isPerturbed = np.array([True if name in channel_to_perturb 
                             else False for name in channel])
-    feature_range = ((0*np.ones(C) - mu)/sigma,((unnormed_mean*fano*5) - mu)/sigma)
+    feature_range = (np.maximum(-mu/sigma, np.ones(C)*-4),np.ones(C)*4)
     feature_range[0][~isPerturbed] = X_mean[~isPerturbed]-1e-20
     feature_range[1][~isPerturbed] = X_mean[~isPerturbed]+1e-20
 
@@ -146,8 +147,8 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
         print(f"compute probability: {pred_proba}")
         X_perturbed = mean_skipfew(np.mean, cf*sigma+mu, preserveAxis=cf.ndim-1)
         X_orig = X_mean*sigma+mu
-        cf_delta = (X_perturbed  - X_orig) / X_orig * 100
-        # print(f"cf unperturbed: {np.max(np.abs(cf_delta[~isPerturbed]))}")
+        # cf_delta = (X_perturbed  - X_orig) / X_orig * 100
+        cf_delta = (X_perturbed  - X_orig)/mu
         cf_perturbed = dict(zip(channel[isPerturbed],cf_delta[isPerturbed]))
         print(f"cf perturbed: {cf_perturbed}")
 
@@ -165,18 +166,10 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
                                 channel_to_perturb=channel_to_perturb)
     return
 
-# def alter_image(y, patch, mu, sigma, orig_mean):
-#     unnormed_mean = orig_mean*sigma + mu
-#     unnormed_y = y*sigma + mu
-#     unnormed_patch = patch*sigma + mu
-#     a = np.minimum(1.0, unnormed_y/unnormed_mean)
-#     b = np.maximum(0.0, unnormed_y-unnormed_mean)
-#     new_patch = a[:,None,None,:]*(unnormed_patch+b[:,None,None,:])
-#     return (new_patch-mu)/sigma
-
 def alter_image(y, unnormed_patch, mu, sigma, unnormed_mean):
     unnormed_y = y*sigma + mu
-    new_patch = unnormed_patch*((unnormed_y/unnormed_mean)[:,None,None,:])
+    # new_patch = unnormed_patch*((unnormed_y/unnormed_mean)[:,None,None,:])
+    new_patch = unnormed_patch-((unnormed_mean-unnormed_y)[:,None,None,:])
     return (new_patch-mu)/sigma
 
 def load_object(filename):

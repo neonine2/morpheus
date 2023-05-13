@@ -23,8 +23,11 @@ def generate_split_from_data(DATA_NAME, metadata_path,
     
     # split data and save to splitdata_path
     if not os.path.isdir(output_path):
+        print("creating directory")
         os.makedirs(output_path)
-        print("Given data directory created")
+    else:
+        print(f"Given data directory already created: {output_path}")
+
     if len(os.listdir(output_path))<=3:
         stratified_data_split(rawdata_path, metadata_path, output_path, **param)
     else:

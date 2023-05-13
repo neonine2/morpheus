@@ -17,7 +17,8 @@ def describe_data_split(output_path):
 
 def generate_split_from_data(DATA_NAME, metadata_path, 
                              param = {'eps':0.01, "train_lb":0.65, "split_ratio":[0.65,0.15,0.2]}):
-    output_path = os.path.expanduser(f'/mnt/jerrywang/zwang2/IMC/output/{DATA_NAME}')
+    DIR = os.path.dirname(metadata_path)
+    output_path = os.path.expanduser(f'{DIR}/{DATA_NAME}')
     rawdata_path = f'{output_path}/patched.dat'
     
     # split data and save to splitdata_path

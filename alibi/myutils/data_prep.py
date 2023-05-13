@@ -17,8 +17,8 @@ def describe_data_split(output_path):
 
 def generate_split_from_data(DATA_NAME, metadata_path, 
                              param = {'eps':0.01, "train_lb":0.65, "split_ratio":[0.65,0.15,0.2]}):
-    output_path = os.path.expanduser(f'~/IMC/output/{DATA_NAME}')
-    rawdata_path = f'{output_path}/{DATA_NAME}.dat'
+    output_path = os.path.expanduser(f'/mnt/jerrywang/zwang2/IMC/output/{DATA_NAME}')
+    rawdata_path = f'{output_path}/patched.dat'
     
     # split data and save to splitdata_path
     if not os.path.isdir(output_path):
@@ -62,7 +62,7 @@ def stratified_data_split(data_path, metadata_path, splitdata_path, split_ratio=
     
     #load image data
     with open(data_path, 'rb') as f:
-        intensity, label, channel = pickle.load(f)
+        intensity, label, channel, _ = pickle.load(f)
 
     #stratified data train-test-validation split patient tumor infiltration status
     tr_te_diff = 1
@@ -95,10 +95,11 @@ def stratified_data_split(data_path, metadata_path, splitdata_path, split_ratio=
         train_label = label[np.isin(label['ImageNumber'],train_image)]
         val_label = label[np.isin(label['ImageNumber'],valid_image)]
         test_label = label[np.isin(label['ImageNumber'],test_image)]
-        X_train,X_val,X_test = intensity[train_label.index,:],intensity[val_label.index,:],intensity[test_label.index,:]
-        X_train,train_label = unison_shuffled_copies(X_train, train_label)
-        X_val,val_label = unison_shuffled_copies(X_val, val_label)
-        X_test,test_label = unison_shuffled_copies(X_test, test_label)
+        
+        train_index,train_label = unison_shuffled_copies(train_label.index, train_label)
+        val_index,val_label = unison_shuffled_copies(val_label.index, val_label)
+        test_index,test_label = unison_shuffled_copies(test_label.index, test_label)
+        X_train,X_val,X_test = intensity[train_index,:],intensity[val_index,:],intensity[test_index,:]
         y_train,y_val,y_test = train_label[celltype],val_label[celltype],test_label[celltype]
 
         # compute sample condition values 
@@ -108,6 +109,7 @@ def stratified_data_split(data_path, metadata_path, splitdata_path, split_ratio=
         tr_va_diff = abs(y_train_mean - y_val_mean)
 
         # if sample conditions satisfied, save split
+        print(tr_te_diff, tr_va_diff, tr_prop)
         if sample_cond(tr_te_diff, tr_va_diff, tr_prop, eps, train_lb):
             print('Balanced data splitting done with conditions satisfied!')
             print("""Train sample prop: {} \nValidation sample prop: {} \nTest sample prop: {} 
@@ -117,7 +119,8 @@ def stratified_data_split(data_path, metadata_path, splitdata_path, split_ratio=
             mu = np.mean(X_train,axis=(0,1,2))
             std = np.std(X_train,axis=(0,1,2))
             data_dict = {"channel":channel, "patient_df":pat_df, 
-                        "mean":mu, "stdev":std, "shape":X_train.shape[1:]}
+                        "mean":mu, "stdev":std, "shape":X_train.shape[1:], "train_index":train_index, 
+                        "val_index":val_index, "test_index":test_index}
             file = open(os.path.join(splitdata_path,'data_info.pkl'), 'wb')
             pickle.dump(data_dict, file, protocol=4)
             file.close()

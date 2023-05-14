@@ -2,26 +2,6 @@ import os
 import numpy as np
 import re
 import pandas as pd
-import tensorflow as tf
-
-def initialize_gpu():
-    gpus = tf.config.list_physical_devices('GPU')
-    if gpus:
-        print('using GPUs')
-        # Restrict TensorFlow to only use the first GPU
-        try:
-            # for gpu in gpus:
-            #     tf.config.experimental.set_virtual_device_configuration(gpu,
-            #                             [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=1024*21)])
-            tf.config.set_visible_devices(gpus[1], 'GPU')
-            logical_gpus = tf.config.list_logical_devices('GPU')
-            print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPU")
-        except RuntimeError as e:
-            # Visible devices must be set before GPUs have been initialized
-            print(e)
-    else:
-        logical_cpus = tf.config.list_logical_devices('CPU')
-        print(len(logical_cpus), "Logical CPU")
 
 def uniquify(path):
     filename, extension = os.path.splitext(path)

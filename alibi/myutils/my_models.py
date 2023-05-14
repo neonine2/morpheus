@@ -6,7 +6,7 @@ import pytorch_lightning as pl
 # from pytorch_lightning.callbacks import TQDMProgressBar
 import torchmetrics.functional.classification as tfcl
 
-import torchvision as tv
+# import torchvision as tv
 # import tensorflow as tf
 # import tensorflow_addons as tfa
 

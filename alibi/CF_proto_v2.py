@@ -75,6 +75,7 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
         altered_model, input_transform = add_init_layer(X_orig[None,:],init_fun,model,ml_framework)
 
     # Set range of each channel to perturb
+    channel_to_perturb = [name for name in channel if name in channel_to_perturb] # IMPORTANT: keep channel in appropriate order
     isPerturbed = np.array([True if name in channel_to_perturb 
                             else False for name in channel])
     feature_range = (np.maximum(-mu/sigma, np.ones(C)*-4),np.ones(C)*4)
@@ -147,8 +148,8 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
         print(f"compute probability: {pred_proba}")
         X_perturbed = mean_skipfew(np.mean, cf*sigma+mu, preserveAxis=cf.ndim-1)
         X_orig = X_mean*sigma+mu
-        # cf_delta = (X_perturbed  - X_orig) / X_orig * 100
-        cf_delta = (X_perturbed  - X_orig)/mu
+        cf_delta = (X_perturbed  - X_orig) / X_orig * 100 
+        # cf_delta = (X_perturbed  - X_orig)/mu # for perturbing cell type count
         cf_perturbed = dict(zip(channel[isPerturbed],cf_delta[isPerturbed]))
         print(f"cf perturbed: {cf_perturbed}")
 
@@ -168,8 +169,8 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
 
 def alter_image(y, unnormed_patch, mu, sigma, unnormed_mean):
     unnormed_y = y*sigma + mu
-    # new_patch = unnormed_patch*((unnormed_y/unnormed_mean)[:,None,None,:])
-    new_patch = unnormed_patch-((unnormed_mean-unnormed_y)[:,None,None,:])
+    new_patch = unnormed_patch*((unnormed_y/unnormed_mean)[:,None,None,:])
+    # new_patch = unnormed_patch+((unnormed_y-unnormed_mean)[:,None,None,:]) # for perturbing cell type count
     return (new_patch-mu)/sigma
 
 def load_object(filename):

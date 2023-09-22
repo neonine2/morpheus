@@ -24,22 +24,28 @@ def image_to_patch(df, patch_dim, width=None, height=None, recinterval=True):
                     df.loc[in_Patch,'y0'] = y0
     return df
 
-def patch_to_intensity(df, typeName, celltype, genelist, channel_to_remove=[], discardEmpty=True):
-    df = df.copy(deep=True)
-    if not isinstance(celltype,list):
-        celltype = [celltype]
-    for cell in celltype:
-        df[cell] = df[typeName]==cell
-    genes_to_keep = [gene for gene in genelist if gene not in set(channel_to_remove)]
-    df = df[['ImageNumber','PatchNumber']+genes_to_keep+celltype+['x0','y0']]
+# def patch_to_intensity(df, typeName, celltype, genelist, channel_to_remove=[], discardEmpty=True):
+#     df = df.copy(deep=True)
+#     if not isinstance(celltype,list):
+#         celltype = [celltype]
+#     for cell in celltype:
+#         df[cell] = df[typeName]==cell
+#     genes_to_keep = [gene for gene in genelist if gene not in set(channel_to_remove)]
+#     df = df[['ImageNumber','PatchNumber']+genes_to_keep+celltype+['x0','y0']]
 
-    grouped = df.groupby(['ImageNumber','PatchNumber'])
-    intensity_label = pd.concat([grouped.sum()[genes_to_keep], grouped.max()[celltype],
-                                grouped.mean()[['x0','y0']]], axis=1)
+#     grouped = df.groupby(['ImageNumber','PatchNumber'])
+#     intensity_label = pd.concat([grouped.sum()[genes_to_keep], grouped.max()[celltype],
+#                                 grouped.mean()[['x0','y0']]], axis=1)
         
-    if discardEmpty:
-        intensity_label = intensity_label.loc[np.sum(abs(intensity_label[genes_to_keep+celltype]),axis=1) > 0,:]
-    return intensity_label
+#     if discardEmpty:
+#         intensity_label = intensity_label.loc[np.sum(abs(intensity_label[genes_to_keep+celltype]),axis=1) > 0,:]
+#     return intensity_label
+
+def get_patch_coord(df, patch_sz):
+    df = df.copy(deep=True)
+    df = df[['ImageNumber','PatchNumber', 'x0','y0']]
+    coord = df.groupby(['ImageNumber','PatchNumber']).mean()[['x0','y0']].groupby('ImageNumber').mean().reset_index(drop=True).to_numpy()/patch_sz
+    return coord.astype('int')
 
 def patch_to_pixel(df, width, height, pixel_dim):
     df = df.copy(deep=True)

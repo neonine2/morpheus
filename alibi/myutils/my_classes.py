@@ -41,7 +41,7 @@ def make_torch_dataloader(data_path, img_size, model='mlp',
     if model != 'unet':
         train_transform = transforms.Compose([transforms.ToTensor(),
                                               transforms.Normalize(info_dict['mean'], info_dict['stdev']), 
-                                            #   transforms.Lambda(torch.asinh),
+                                              transforms.Lambda(torch.asinh),
                                               transforms.ConvertImageDtype(torch.float),
                                             lambda x: torch.mean(x,dim=(1,2))])
         transform = train_transform

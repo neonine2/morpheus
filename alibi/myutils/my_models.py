@@ -63,7 +63,7 @@ class TissueClassifier(pl.LightningModule):
 
     def forward(self, x):
         self.predictor.eval()
-        pred = self.predictor(x)
+        pred = F.softmax(self.predictor(x), dim=1)
         return pred
 
     def configure_optimizers(self):

@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-
+import numpy as np
 import pytorch_lightning as pl
 # from pytorch_lightning.callbacks import TQDMProgressBar
 import torchmetrics.functional.classification as tfcl
@@ -48,7 +48,7 @@ class TissueClassifier(pl.LightningModule):
             classifier = torch.nn.Sequential()
             classifier.add_module('flatten', nn.Flatten())
             classifier.add_module('fc', nn.Linear(img_size*img_size, num_target_classes))
-            # classifier.add_module('act', nn.Softmax())
+            classifier.add_module('act', nn.Softmax())
             self.predictor = nn.Sequential(*[backbone, classifier])
         elif modelArch == 'mlp':
             self.predictor = nn.Sequential(
@@ -56,14 +56,16 @@ class TissueClassifier(pl.LightningModule):
                 nn.ReLU(),
                 nn.Linear(30, 10),
                 nn.ReLU(),
-                nn.Linear(10, num_target_classes))
+                nn.Linear(10, num_target_classes),
+                nn.Softmax())
         elif modelArch == 'lr':
             self.predictor = nn.Sequential(
-                nn.Linear(in_channels, num_target_classes))
+                nn.Linear(in_channels, 1),
+                nn.Sigmoid())
 
     def forward(self, x):
         self.predictor.eval()
-        pred = F.softmax(self.predictor(x), dim=1)
+        pred = self.predictor(x)
         return pred
 
     def configure_optimizers(self):
@@ -96,6 +98,11 @@ class TissueClassifier(pl.LightningModule):
 
 def log_metrics(mode, preds, target):
     # classification metrics
+    if preds.shape[1] == 1:
+        # Create a new column that is 1 minus the first column
+        new_col = 1 - preds[:, 0]
+        # Append the new column to the original matrix
+        preds = torch.column_stack((preds, new_col))
     bce = F.binary_cross_entropy_with_logits(preds, target)
     
     preds = torch.argmax(preds, dim=1).float()

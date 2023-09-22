@@ -38,27 +38,19 @@ def make_torch_dataloader(data_path, img_size, model='mlp',
     with open(os.path.join(data_path,'data_info.pkl'), 'rb') as f:
         info_dict = pickle.load(f)
     
+    transformation = [transforms.ToTensor(),
+                      transforms.Normalize(info_dict['mean'], info_dict['stdev']),
+                      transforms.ConvertImageDtype(torch.float)]
     if model != 'unet':
-        train_transform = transforms.Compose([transforms.ToTensor(),
-                                              transforms.Normalize(info_dict['mean'], info_dict['stdev']), 
-                                              transforms.Lambda(torch.asinh),
-                                              transforms.ConvertImageDtype(torch.float),
-                                            lambda x: torch.mean(x,dim=(1,2))])
+        train_transform = transforms.Compose(transformation+
+                                            [lambda x: torch.mean(x,dim=(1,2))])
         transform = train_transform
     else:
-        train_transform = transforms.Compose([transforms.ToTensor(),
-                                            transforms.Resize(img_size),
-                                            transforms.Normalize(info_dict['mean'], info_dict['stdev']),
-                                            transforms.Lambda(torch.asinh),
-                                            transforms.ConvertImageDtype(torch.float),
-                                            transforms.RandomHorizontalFlip(),
+        train_transform = transforms.Compose(transformation+
+                                            [transforms.RandomHorizontalFlip(),
                                             transforms.RandomVerticalFlip(),
                                             transforms.RandomRotation(degrees=90)])
-        transform = transforms.Compose([transforms.ToTensor(),
-                                        transforms.Resize(img_size),
-                                        transforms.Normalize(info_dict['mean'], info_dict['stdev']),
-                                        transforms.Lambda(torch.asinh),
-                                        transforms.ConvertImageDtype(torch.float)])
+        transform = transforms.Compose(transformation)
     training_data = torchDataset(data_path + '/train', transform=train_transform)
     validation_data = torchDataset(data_path + '/validate', transform=transform)
     testing_data = torchDataset(data_path + '/test', transform=transform)

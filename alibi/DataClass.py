@@ -284,12 +284,16 @@ class IMCDataset:
         X = (X-self.mu)/self.stdev
         if self.modelArch != 'unet':
             X = np.mean(X, axis=(1,2))
-        pred_orig = self.classifier(X)[:,1] 
+        pred = self.classifier(X)
+        if pred.shape[1] == 2:
+            pred = pred[:,1]
+        else:
+            pred = 1-pred
 
         # map each patch to patient
         pre_post_df = pd.DataFrame({'ImageNumber': img_num.flatten(), 
                                     'orig': y_test.flatten() == 1, 
-                                    'predict': pred_orig > threshold})
+                                    'predict': pred.flatten() > threshold})
         img_mean = pre_post_df.groupby(['ImageNumber']).mean().reset_index()
         img_mean['patch_count'] = pre_post_df.groupby(['ImageNumber']).size().reset_index().iloc[:,-1]
 

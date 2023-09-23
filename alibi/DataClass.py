@@ -25,6 +25,7 @@ class IMCDataset:
         self.figure_path = f'{self.data_dir}/figure'
         self.minsize = minsize
         self.patient_cluster=None
+        self.modelArch = modelArch
 
         info = np.load(self.info_path, allow_pickle=True)
         self.channel = info['channel']
@@ -35,7 +36,7 @@ class IMCDataset:
 
         if model_path is not None:
             self.model_path = os.path.join(self.data_dir+model_path, os.listdir(self.data_dir+model_path)[0])
-            self.get_classifier(self.model_path, threshold, modelArch)
+            self.get_classifier(self.model_path, threshold, self.modelArch)
         else:
             self.classifier = None
 
@@ -275,16 +276,24 @@ class IMCDataset:
             threshold = self.threshold
 
         X, label = self.get_data_split(split)
+        
         img_num = label[['ImageNumber']].values.flatten()
         y_test = label[['Tcytotoxic']].values.flatten()
 
         # predict patch label
-        pred_orig = self.classifier((X-self.mu)/self.stdev)[:,1] 
+        X = (X-self.mu)/self.stdev
+        if self.modelArch != 'unet':
+            X = np.mean(X, axis=(1,2))
+        pred = self.classifier(X)
+        if pred.shape[1] == 2:
+            pred = pred[:,1]
+        else:
+            pred = 1-pred
 
         # map each patch to patient
         pre_post_df = pd.DataFrame({'ImageNumber': img_num.flatten(), 
                                     'orig': y_test.flatten() == 1, 
-                                    'predict': pred_orig > threshold})
+                                    'predict': pred.flatten() > threshold})
         img_mean = pre_post_df.groupby(['ImageNumber']).mean().reset_index()
         img_mean['patch_count'] = pre_post_df.groupby(['ImageNumber']).size().reset_index().iloc[:,-1]
 

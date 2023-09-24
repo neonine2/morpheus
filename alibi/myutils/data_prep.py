@@ -17,8 +17,8 @@ def describe_data_split(output_path):
 
 def generate_split_from_data(DATA_NAME, metadata_path, image_split=None,
                              param = {'eps':0.01, "train_lb":0.65, "split_ratio":[0.65,0.15,0.2]}):
-    DIR = os.path.dirname(metadata_path)
-    output_path = os.path.expanduser(f'{DIR}/{DATA_NAME}')
+    output_path = os.path.expanduser(f'{metadata_path}/{DATA_NAME}')
+    patient_path = f'{output_path}/patient_info.csv'
     rawdata_path = f'{output_path}/patched.dat'
     
     # split data and save to splitdata_path
@@ -29,13 +29,13 @@ def generate_split_from_data(DATA_NAME, metadata_path, image_split=None,
         print(f"Given data directory already created: {output_path}")
 
     if len(os.listdir(output_path))<=3:
-        stratified_data_split(rawdata_path, metadata_path, output_path, image_split, **param)
+        stratified_data_split(rawdata_path, patient_path, output_path, image_split, **param)
     else:
         print("Data directory is already filled with the following split:")
         pprint(describe_data_split(output_path))
     return output_path
 
-def stratified_data_split(data_path, metadata_path, splitdata_path, image_split=None, 
+def stratified_data_split(data_path, patient_path, splitdata_path, image_split=None, 
                           split_ratio=[0.6,0.2,0.2], eps=0.05, train_lb=0.65, ntol=100, celltype='Tcytotoxic'):
     # Ratio of patients in different groups
     train_ratio = split_ratio[0]

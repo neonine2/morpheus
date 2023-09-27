@@ -10,7 +10,7 @@ import tensorflow.compat.v1 as tf
 import torch
 
 def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, model_arch=None,
-                 X_train_path=None, optimization_params=dict(), SAVE=False, save_dir=None, patch_id=None):
+                 X_train_path=None, optimization_params=dict(), SAVE=False, save_dir=None, patch_id=None, threshold=0.5):
     model_name = model_path.split(os.sep)[-1]
     model_ext = model_name.split('.')[1].lower()
     if model_ext == 'h5':
@@ -80,7 +80,8 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, model
     print('check instance')
     # Terminate if model incorrectly classifies patch as the target class
     target_class = optimization_params.pop('target_class')
-    pred = np.argmax(predict_fn(X_mean[None,]))
+    print(predict_fn(X_mean[None,]))
+    pred = predict_fn(X_mean[None,])[0,1] > threshold
     if pred == target_class:
         print('instance already classified as target class, no counterfactual needed')
         return 

@@ -9,16 +9,14 @@ import tensorflow.compat.v1 as tf
 
 import torch
 
-def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
-                 X_train_path=None, optimization_params=dict(), SAVE=False, save_dir=None, patch_id=None):
+def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, model_arch=None,
+                 X_train_path=None, optimization_params=dict(), SAVE=False, save_dir=None, patch_id=None, threshold=0.5):
     model_name = model_path.split(os.sep)[-1]
     model_ext = model_name.split('.')[1].lower()
     if model_ext == 'h5':
         ml_framework = 'tensorflow'
-        model_arch = model_name.split('.')[0].lower()
     elif model_ext == 'ckpt':
         ml_framework = 'pytorch'
-        model_arch = model_path.split(os.sep)[-5]
     else:
         raise Exception('improper model file used!')
 
@@ -26,22 +24,14 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
     channel = np.array(data_dict['channel'])
     sigma = data_dict['stdev']
     mu = data_dict['mean']
-    H, W, C = X_orig.shape
+    H, _, C = X_orig.shape
 
     # if not os.path.exists(optimization_params['trustscore']):
     X_train = np.load(X_train_path)
-    X_train_mean = np.mean(X_train,axis=(1,2))
-    fano = np.std(X_train_mean,axis=0)/np.mean(X_train_mean,axis=0)
-    # Change image shape
-    if ml_framework == 'tensorflow':
-        #all tensorflow networks take 32 by 32 images
-        input_shape = (32,32)
-        resize_fn = tf.keras.layers.Resizing(input_shape[0], input_shape[1], interpolation='nearest')
-        X_orig = resize_fn(X_orig).numpy()
-        X_train = resize_fn(X_train)
+    # X_train_mean = np.mean(X_train,axis=(1,2))
+    # fano = np.std(X_train_mean,axis=0)/np.mean(X_train_mean,axis=0)
     X_orig = (X_orig - mu)/sigma
     X_mean = np.mean(X_orig,axis=(0,1))
-    
     
     if model_arch == 'mlp':
         X_orig = X_mean
@@ -59,7 +49,6 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
     # Adding init layer to model
     # make sure X_orig is unnormalized when passed into add_init_layer
     unnormed_mean = X_mean*sigma+mu
-    print(unnormed_mean)
     if model_arch == 'mlp':
         def altered_model(x): 
             return torch.nn.functional.softmax(model(torch.from_numpy(x).float()),dim=1)
@@ -72,7 +61,7 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
         unnormed_patch = X_orig[None,:]*sigma+mu
         def init_fun(y):
             return alter_image(y, unnormed_patch, mu, sigma, unnormed_mean)
-        altered_model, input_transform = add_init_layer(X_orig[None,:],init_fun,model,ml_framework)
+        altered_model, input_transform = add_init_layer(init_fun,model)
 
     # Set range of each channel to perturb
     channel_to_perturb = [name for name in channel if name in channel_to_perturb] # IMPORTANT: keep channel in appropriate order
@@ -91,7 +80,8 @@ def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict,
     print('check instance')
     # Terminate if model incorrectly classifies patch as the target class
     target_class = optimization_params.pop('target_class')
-    pred = np.argmax(predict_fn(X_mean[None,]))
+    print(predict_fn(X_mean[None,]))
+    pred = predict_fn(X_mean[None,])[0,1] > threshold
     if pred == target_class:
         print('instance already classified as target class, no counterfactual needed')
         return 
@@ -177,26 +167,12 @@ def load_object(filename):
     with open(filename, 'rb') as outp: 
         return pickle.load(outp)
     
-def add_init_layer(patch, init_fun, model, ml_framework='tf'):
-    if len(patch.shape) > 3:
-        _,H,W,C = patch.shape
-    else:
-        H,W,C = 1,1,patch.shape[-1]
-    
-    if ml_framework == 'tensorflow':
-        newInput = tf.keras.Input(shape=(C,))
-        x = tf.keras.layers.Lambda(init_fun)(newInput)
-        input_transform = tf.keras.Model(newInput, x)
-        newOutputs = model(x)
-        completeModel = tf.keras.Model(newInput, newOutputs)
-    elif ml_framework == 'pytorch':
-        class input_fun(torch.nn.Module):
-            def forward(self, input):
-                return torch.permute(torch.from_numpy(init_fun(input)), (0,3,1,2)).float()
-        input_transform = input_fun()
-        completeModel = torch.nn.Sequential(input_transform, model)
-    else:
-        raise Exception('ML framework not supported.')
+def add_init_layer(init_fun, model):
+    class input_fun(torch.nn.Module):
+        def forward(self, input):
+            return torch.permute(torch.from_numpy(init_fun(input)), (0,3,1,2)).float()
+    input_transform = input_fun()
+    completeModel = torch.nn.Sequential(input_transform, model)
     return completeModel, input_transform
 
 def mean_skipfew(ufunc, foo, preserveAxis=None):

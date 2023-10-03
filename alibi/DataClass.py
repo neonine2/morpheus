@@ -282,6 +282,7 @@ class IMCDataset:
 
         # predict patch label
         X = (X-self.mu)/self.stdev
+        # X = np.arcsinh(X)
         if self.modelArch != 'unet':
             X = np.mean(X, axis=(1,2))
         pred = self.classifier(X)

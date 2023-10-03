@@ -69,7 +69,8 @@ class TissueClassifier(pl.LightningModule):
         return pred
 
     def configure_optimizers(self):
-        optimizer = torch.optim.SGD(self.parameters(), lr=1e-2, momentum=0.9, nesterov=True)
+        # optimizer = torch.optim.SGD(self.parameters(), lr=1e-2, momentum=0.9, nesterov=True)
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
         return optimizer
     
     def execute_and_get_metric(self,batch,mode):

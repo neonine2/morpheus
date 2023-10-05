@@ -105,12 +105,12 @@ class IMCDataset:
         colors = ['darkgray' if label == 'Stage unknown' else color for label, color in zip(stage_1_counts.index, colors)]
         stage_1_counts.plot.pie(autopct='%1.1f%%', colors=colors)
         plt.ylabel('')  # This line can be used to remove the ylabel.
-        plt.savefig(f'{self.figure_path}/cancer_stage_pie_1_{self.name}.svg')
+        # plt.savefig(f'{self.figure_path}/cancer_stage_pie_1_{self.name}.svg')
         plt.show()
 
         stage_2_counts.plot.pie(autopct='%1.1f%%', colors=colors)
         plt.ylabel('')  # This line can be used to remove the ylabel.
-        plt.savefig(f'{self.figure_path}/cancer_stage_pie_2_{self.name}.svg')
+        # plt.savefig(f'{self.figure_path}/cancer_stage_pie_2_{self.name}.svg')
         plt.show()
 
     def plot_volcano(self, n_cluster, compare='gene', p_cutoff=0.05, show_heatmap=False, save_volcanoplot=False):
@@ -263,18 +263,27 @@ class IMCDataset:
         nnmodel = TissueClassifier.load_from_checkpoint(model_path, 
                                                     in_channels=len(self.channel),
                                                     img_size=self.img_size[0],
-                                                    modelArch=modelArch)
+                                                    modelArch=self.modelArch)
+        # disable randomness, dropout, etc...
+        nnmodel.eval()
         def classifier_fun(x):
             x = torch.from_numpy(x).float()
             if x.ndim == 4:
                 x = torch.permute(x, (0,3,1,2))
-            return torch.nn.functional.softmax(nnmodel(x), dim=1).detach().numpy()
+            pred = nnmodel(x)
+            if self.modelArch == 'lr':
+                pred = torch.column_stack((pred, 1 - pred[:, 0]))
+            return torch.nn.functional.softmax(pred, dim=1).detach().numpy()
         self.classifier = classifier_fun
+
+    @staticmethod
+    def softmax(x, axis=1):
+        e_x = np.exp(x - np.max(x, axis=axis, keepdims=True))  # for numerical stability
+        return e_x / e_x.sum(axis=axis, keepdims=True)
 
     def compute_prediction(self, threshold=None, split='test'):
         if threshold is None:
             threshold = self.threshold
-
         X, label = self.get_data_split(split)
         
         img_num = label[['ImageNumber']].values.flatten()
@@ -282,14 +291,13 @@ class IMCDataset:
 
         # predict patch label
         X = (X-self.mu)/self.stdev
-        # X = np.arcsinh(X)
         if self.modelArch != 'unet':
             X = np.mean(X, axis=(1,2))
         pred = self.classifier(X)
-        if pred.shape[1] == 2:
-            pred = pred[:,1]
-        else:
-            pred = 1-pred
+        if pred.shape[1] == 1:
+            new_col = 1 - pred[:, 0]
+            pred = np.column_stack((pred, new_col))
+        pred = pred[:,1]
 
         # map each patch to patient
         pre_post_df = pd.DataFrame({'ImageNumber': img_num.flatten(), 
@@ -303,6 +311,7 @@ class IMCDataset:
 
         rmse = np.sqrt(mean_squared_error(self.img_mean['orig'], self.img_mean['predict']))
         print('Root Mean Squared Error:', rmse)
+        return pred, X
 
     def regression_plus_T_Test(self):
         x = self.img_mean['orig'].to_numpy()

@@ -115,7 +115,7 @@ def log_metrics(mode, preds, target):
     precision = tfcl.binary_precision(preds,target)
     recall = tfcl.binary_recall(preds,target)
     metric_dict = {mode+'_bce':bce, 
-                   mode+'_precision':precision, 
+                   mode+'_precisio1n':precision, 
                    mode+'_recall':recall,
                    mode+'_bmc':bmc,
                    mode+'_auroc':auroc,
@@ -125,14 +125,20 @@ def log_metrics(mode, preds, target):
     
 def get_prediction(model, data_loader):
     m = nn.Softmax(dim=1)
-    pred = []
-    label = []
+    preds = []
+    labels = []
     for x, y in iter(data_loader):
-        pred.append(m(model(x))[:,1])
-        label.append(y)
-    pred = torch.cat(pred, dim=0)
-    label = torch.cat(label, dim=0)
-    return pred, label
+        pred = model(x)
+        if pred.shape[1] == 1:
+            # Create a new column that is 1 minus the first column
+            new_col = 1 - pred[:, 0]
+            # Append the new column to the original matrix
+            pred = torch.column_stack((pred, new_col))
+        preds.append(m(pred)[:,1])
+        labels.append(y)
+    preds = torch.cat(preds, dim=0)
+    labels = torch.cat(labels, dim=0)
+    return preds, labels
 
 # METRICS = [ 
 #         tf.keras.metrics.BinaryAccuracy(name='accuracy'),

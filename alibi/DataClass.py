@@ -15,6 +15,7 @@ from sklearn.metrics import mean_squared_error
 import scipy.stats as stats
 import scipy.cluster.hierarchy as sch
 import matplotlib.pyplot as plt
+import matplotlib.colors as colors
 
 class IMCDataset:
     def __init__(self, name, data_dir, model_path=None, patient_path=None, threshold=None, modelArch='unet', minsize=49):
@@ -33,6 +34,7 @@ class IMCDataset:
         self.mu = info['mean']
         self.stdev = info['stdev']
         self.test_df = None
+        self.threshold = threshold
 
         if model_path is not None:
             self.model_path = os.path.join(self.data_dir+model_path, os.listdir(self.data_dir+model_path)[0])
@@ -84,12 +86,15 @@ class IMCDataset:
     def get_perturbation_cluster(self, n_cluster, show_plot=False):
         grouped_cf = self.cf_rel[self.cf_rel['prob']>self.threshold][['PatientID'] + self.channel_to_perturb].copy()
         grouped_cf = grouped_cf.groupby(['PatientID']).median()
-        axe= sns.clustermap(grouped_cf, z_score=0, row_cluster=True, col_cluster=False, method="ward")
+        vmin = grouped_cf.min().min()
+        vmax = grouped_cf.max().max()
+        axe= sns.clustermap(grouped_cf, row_cluster=True, col_cluster=True, method = "ward",
+                     norm=colors.TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax))
         if not show_plot:
             plt.close(axe.fig)
         clusters = sch.fcluster(axe.dendrogram_row.linkage, n_cluster, 'maxclust')
         self.patient_cluster = []
-        for ii in range(n_cluster):
+        for ii in range(2):
             self.patient_cluster.append(np.array(grouped_cf.index[clusters==ii+1]))
     
     def compare_cancer_stage(self):
@@ -113,11 +118,12 @@ class IMCDataset:
         # plt.savefig(f'{self.figure_path}/cancer_stage_pie_2_{self.name}.svg')
         plt.show()
 
-    def plot_volcano(self, n_cluster, compare='gene', p_cutoff=0.05, show_heatmap=False, save_volcanoplot=False):
+    def plot_volcano(self, n_cluster, patient_cluster=None, compare='gene', p_cutoff=0.05, show_heatmap=False, save_volcanoplot=False):
         """
         df: A pandas DataFrame with patient ID and gene expressions.
         partitions: A list of numpy arrays of patient IDs, specifying partitions of the DataFrame.
         """
+        self.patient_cluster = patient_cluster
         if self.patient_cluster is None:
             self.get_perturbation_cluster(n_cluster, show_heatmap)
 
@@ -153,16 +159,7 @@ class IMCDataset:
                 expression_j = self.partitioned_dfs[1][item].dropna()
 
             # Calculate fold change
-            if compare == 'celltype':
-                # if np.median(expression_i) == 0 or np.median(expression_j) == 0:
-                    # expression_i += 1
-                    # expression_j += 1
-                fold_change = np.median(expression_i) / np.median(expression_j)
-            else:
-                # if np.mean(expression_i) == 0 or np.mean(expression_j) == 0:
-                    # expression_i += 1
-                    # expression_j += 1
-                fold_change = np.median(expression_i) / np.median(expression_j)
+            fold_change = np.median(expression_i) / np.median(expression_j)
             fold_changes.append(np.log2(fold_change))  # we log transform the fold change for better visualization and stability
             
             # Calculate p-value
@@ -179,12 +176,12 @@ class IMCDataset:
         plot_df = pd.DataFrame({
             compare: column,
             'log2(fold_change)': fold_changes,
-            '-log10(p_value_adj)': [-np.log10(val) if val != 0 else 300 for val in p_values_adj],
+            '-log10(p_value_adj)': [-np.log10(val) if val != 0 else 150 for val in p_values_adj],
         })
         self.p_values_adj = p_values_adj
         
         # Create the volcano plot
-        plt.figure(figsize=(2.5, 4))
+        plt.figure(figsize=(2.5, 3.5))
 
         # Create masks for significant and non-significant points
         significant_mask = plot_df['-log10(p_value_adj)'] > -np.log10(p_cutoff)
@@ -208,11 +205,12 @@ class IMCDataset:
 
         plt.xlabel('log2(Fold Change between patient cluster 1 & 2)')
         plt.ylabel('-log10(Adjusted p-value)')
+        
         # plt.title(f'Volcano plot of {compare} differences between partition 1 and 2')
 
         for i in range(plot_df.shape[0]):
             plt.text(plot_df['log2(fold_change)'][i], plot_df['-log10(p_value_adj)'][i], plot_df[compare][i], fontsize=8)
-
+        plt.yscale("log")
         if save_volcanoplot:
             plt.savefig(f'{self.figure_path}/{compare}_volcano_plot_{self.name}.svg')
 

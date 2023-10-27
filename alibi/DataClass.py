@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 
 class IMCDataset:
-    def __init__(self, name, data_dir, model_path=None, patient_path=None, threshold=None, modelArch='unet', minsize=49):
+    def __init__(self, name, data_dir, model_path=None, patient_path=None, threshold=None, metadata=None, modelArch='unet', minsize=49):
         self.name = name
         self.data_dir = data_dir
         self.patient_ID = pd.read_csv(patient_path,index_col=[0])
@@ -44,6 +44,13 @@ class IMCDataset:
 
         if not os.path.isdir(self.figure_path):
             os.makedirs(self.figure_path)
+
+        if metadata is not None:
+            self.metadata = pd.read_csv(metadata)
+            if self.name == 'Liver tumor':
+                self.metadata.loc[self.metadata['ImageNumber']==134, 'type'] = 'metaT' # manually correct the type of 134
+        else:
+            self.metadata = None
 
         # initialize without counterfactual data
         self.cfdata = 0
@@ -134,18 +141,25 @@ class IMCDataset:
             df = df.reset_index()
             df['ImageNumber'] = df['ImageNumber'].apply(
                                 lambda score: df_raw[df_raw['ImageNumber'] == score]['original_ImageNumber'].values[0])
+            df = df[df['ImageNumber'].isin(self.metadata[self.metadata['type']!='Nor']['ImageNumber'])]
             column = [col for col in df.columns if (col != 'ImageNumber')]
         elif compare == 'gene':
             X, label = self.get_data_split(split='train')
-            X = X.sum(axis=(1,2)) # Arc-sinh transformation since t test assumes normality
+            if self.metadata is not None:
+                filter = label['ImageNumber'].isin(self.metadata[self.metadata['type']!='Nor']['ImageNumber'])
+                X = X[filter,...]
+                label = label[filter].reset_index(drop=True)
+            X = X.sum(axis=(1,2)) 
             X = pd.DataFrame(X, columns=self.channel)
-            X = np.arcsinh(X)
+            # X = np.arcsinh(X) # Arc-sinh transformation since t test assumes normality
             df = pd.concat([label, X], axis=1) 
-            df = df.loc[(df['Tumor']==1),:]
+            # df = df.loc[(df['Tumor']==1),:]
             column = self.channel_to_perturb
         self.partitioned_dfs = self.partition_dataframe(df, column+['ImageNumber'])
 
         fold_changes = []
+        g1_mean = []
+        g2_mean = []
         p_values = []
 
         # Iterate through each column (gene)
@@ -159,8 +173,10 @@ class IMCDataset:
                 expression_j = self.partitioned_dfs[1][item].dropna()
 
             # Calculate fold change
-            fold_change = np.median(expression_i) / np.median(expression_j)
+            fold_change = np.mean(expression_i) / np.mean(expression_j)
             fold_changes.append(np.log2(fold_change))  # we log transform the fold change for better visualization and stability
+            g1_mean.append(np.mean(expression_i))
+            g2_mean.append(np.mean(expression_j))
             
             # Calculate p-value
             if compare == 'celltype':
@@ -176,12 +192,14 @@ class IMCDataset:
         plot_df = pd.DataFrame({
             compare: column,
             'log2(fold_change)': fold_changes,
+            'g1_mean': g1_mean,
+            'g2_mean': g2_mean,
             '-log10(p_value_adj)': [-np.log10(val) if val != 0 else 150 for val in p_values_adj],
         })
         self.p_values_adj = p_values_adj
         
         # Create the volcano plot
-        plt.figure(figsize=(2.5, 3.5))
+        plt.figure(figsize=(1.7, 3.5))
 
         # Create masks for significant and non-significant points
         significant_mask = plot_df['-log10(p_value_adj)'] > -np.log10(p_cutoff)
@@ -384,6 +402,35 @@ class IMCDataset:
             self.core_patient[group_] = core_per_patient
     
     def assess_masking(self, dataset, n, k):
+        """
+        Assess the impact of random masking on the prediction probability of a given dataset.
+
+        Parameters:
+        - dataset (str): The name (or path) of the dataset directory containing the image data.
+        - n (int): Number of randomized versions to create for each image in the test set.
+        - k (int): Number of indices to randomly mask (set to zero) in each randomized version of an image.
+
+        Returns:
+        - prob_diff (ndarray): Difference in predicted probabilities between the randomized and original images.
+        - decision_diff (ndarray): Difference in decision outcomes (based on a threshold) 
+                                between the randomized and original images.
+
+        Description:
+        1. Loads the test images from the specified dataset.
+        2. Filters out any samples where the number of cells is less than or equal to zero.
+        3. Computes the predicted probability for each image in the original test set using the model's classifier.
+        4. For each image:
+        - Identifies the indices of positive numbers (non-zero cells).
+        - Generates n randomized versions of the image. In each version, randomly selects k of the identified 
+            indices and masks them (sets them to zero).
+        5. Computes the predicted probabilities for each of the randomized images.
+        6. Calculates the differences in probabilities (prob_diff) and decision outcomes (decision_diff) 
+        between the randomized and original images.
+
+        Usage Notes:
+        - Ensure that the image files are in the format 'img.npy' and are located in the specified dataset directory.
+        - The function assumes the presence of instance attributes `data_dir`, `mu`, `stdev`, `classifier`, and `threshold`.
+        """
         #compute predicted probability on test set
         X_test = np.load(f'{self.data_dir}/{dataset}/img.npy')
         cond = np.sum(np.max(X_test, axis=-1)>0, axis=(1,2))<=0
@@ -391,29 +438,58 @@ class IMCDataset:
         print(f'{np.sum(cond)} samples removed due to having #cells <= {0}')
 
         n_sample = X_test.shape[0]
-        pred_orig = self.classifier((X_test-self.mu)/self.stdev)[:,1].reshape(-1, 1)
-        X_randomized = np.empty((n*n_sample,)+X_test.shape[1:])
+        # pred_orig = self.classifier((X_test-self.mu)/self.stdev)[:,1].reshape(-1, 1)
+
+        prob_diffs = []
+        decision_diffs = []
+
         for j in range(n_sample):
-            orig = X_test[j,...]
+            orig = X_test[j,...][np.newaxis, ...]
             arr = np.max(orig, axis=-1)
 
             # Find the indices of positive numbers
             indices = np.argwhere(arr > 0)
 
-            # # Generate n versions of the array
-            arr_versions = np.repeat(orig[np.newaxis, :, :, :], n, axis=0)
+            pred_orig = self.classifier((orig-self.mu)/self.stdev)[0][1]
 
-            # # Randomly choose k indices to set to zero in each version
-            for i in range(n):
+            for _ in range(n):
+                randomized_img = orig.copy()
+                
                 if indices.shape[0] < k:
                     chosen_indices = np.random.choice(indices.shape[0], k, replace=True)
                 else:
                     chosen_indices = np.random.choice(indices.shape[0], k, replace=False)
-                # Set chosen indices to zero in the version
-                arr_versions[i, indices[chosen_indices, 0], indices[chosen_indices, 1], :] = 0
-            X_randomized[j*n:(j+1)*n,...] = arr_versions
-        pred_randomized = self.classifier((X_randomized-self.mu)/self.stdev)[:,1].reshape(n_sample,n)
-        prob_diff = pred_randomized - pred_orig
-        decision_diff = (pred_randomized > self.threshold).astype(int) - (pred_orig > self.threshold).astype(int)
-        return prob_diff, decision_diff
+
+                randomized_img[0, indices[chosen_indices, 0], indices[chosen_indices, 1], :] = 0
+
+                pred_randomized = self.classifier((randomized_img-self.mu)/self.stdev)[0][1]
+
+                prob_diffs.append(pred_randomized - pred_orig)
+                decision_diffs.append((pred_randomized > self.threshold).astype(int) - (pred_orig > self.threshold).astype(int))
+
+        return np.array(prob_diffs).reshape(n_sample, n), np.array(decision_diffs).reshape(n_sample, n)
+        # X_randomized = np.empty((n*n_sample,)+X_test.shape[1:])
+        # for j in range(n_sample):
+        #     orig = X_test[j,...]
+        #     arr = np.max(orig, axis=-1)
+
+        #     # Find the indices of positive numbers
+        #     indices = np.argwhere(arr > 0)
+
+        #     # # Generate n versions of the array
+        #     arr_versions = np.repeat(orig[np.newaxis, :, :, :], n, axis=0)
+
+        #     # # Randomly choose k indices to set to zero in each version
+        #     for i in range(n):
+        #         if indices.shape[0] < k:
+        #             chosen_indices = np.random.choice(indices.shape[0], k, replace=True)
+        #         else:
+        #             chosen_indices = np.random.choice(indices.shape[0], k, replace=False)
+        #         # Set chosen indices to zero in the version
+        #         arr_versions[i, indices[chosen_indices, 0], indices[chosen_indices, 1], :] = 0
+        #     X_randomized[j*n:(j+1)*n,...] = arr_versions
+        # pred_randomized = self.classifier((X_randomized-self.mu)/self.stdev)[:,1].reshape(n_sample,n)
+        # prob_diff = pred_randomized - pred_orig
+        # decision_diff = (pred_randomized > self.threshold).astype(int) - (pred_orig > self.threshold).astype(int)
+        # return prob_diff, decision_diff
 

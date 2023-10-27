@@ -853,8 +853,6 @@ class CounterfactualProto(Explainer, FitMixin):
                 ts = load_object(self.trustscore)
                 self.kdtrees = ts.kdtrees
                 self.X_by_class = ts.X_kdtree
-            
-
         return self
 
     def loss_fn(self, pred_proba: np.ndarray, Y: np.ndarray) -> np.ndarray:

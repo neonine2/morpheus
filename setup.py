@@ -7,20 +7,13 @@ def readme():
 
 
 # read version file
-exec(open('alibi/version.py').read())
+exec(open('src/version.py').read())
 
 extras_require = {
-    'ray': ['ray>=0.8.7, <3.0.0'],
-    # shap is separated due to build issues, see https://github.com/slundberg/shap/pull/1802
-    'shap': [
-        'shap>=0.40.0, <0.42.0',  # versioning: https://github.com/SeldonIO/alibi/issues/333
-        'numba>=0.50.0, !=0.54.0, <0.57.0',  # Avoid 0.54 due to: https://github.com/SeldonIO/alibi/issues/466
-    ],
     'tensorflow': ['tensorflow>=2.0.0, !=2.6.0, !=2.6.1, <2.11.0'],
     'torch': ['torch>=1.9.0, <2.0.0'],
     'all': [
         'ray>=0.8.7, <3.0.0',
-        'shap>=0.40.0, <0.42.0',
         'numba>=0.50.0, !=0.54.0, <0.57.0',
         'tensorflow>=2.0.0, !=2.6.0, !=2.6.1, <2.11.0',
         'torch>=1.9.0, <2.0.0'
@@ -32,7 +25,7 @@ if __name__ == '__main__':
           author='Zitong Wang',
           author_email='zwang2@caltech.edu',
           version=__version__,  # type: ignore # noqa F821
-          description='Algorithms for monitoring and explaining machine learning models',
+          description='Morpheus countefactual optimization',
           long_description=readme(),
           long_description_content_type='text/markdown',
           url='https://github.com/neonine2/deepSpace',

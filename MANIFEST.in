@@ -1,3 +1,0 @@
-include alibi/data/cats.tar.gz
-prune doc/
-prune examples/

@@ -1,8 +1,10 @@
-import os, sys, pickle
+import numpy as np
+import os
+import sys
+import pickle
 import random 
-from pathlib import Path
-from src.utils.misc import *
 import pandas as pd
+from src.utils.misc import unison_shuffled_copies, sample_cond
 from pprint import pprint
 
 def describe_data_split(output_path):
@@ -43,7 +45,7 @@ def stratified_data_split(data_path, patient_path, splitdata_path, image_split=N
     test_ratio = split_ratio[2]
     
     #metadata about patient tumor hot/cold status
-    metadata = pd.read_csv(metadata_path)
+    metadata = pd.read_csv(patient_path)
     if 'IHC_T_score' in metadata:
         pat_df = metadata[['IHC_T_score','PatientID','ImageNumber']]
 
@@ -161,6 +163,8 @@ def stratified_data_split(data_path, patient_path, splitdata_path, image_split=N
         else:
             counter+=1
         
+
+
 
 
 

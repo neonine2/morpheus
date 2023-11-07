@@ -1,16 +1,57 @@
 import os
-import _pickle as pickle
 import numpy as np
 import time
 import torch
 import tensorflow.compat.v1 as tf
 from src.explainers.cfproto import CounterfactualProto
-from src.utils.my_models import *
+from src.utils.my_models import TissueClassifier
 
 EPSILON = 1e-20
 
-def generate_cf(X_orig, y_orig, model_path, channel_to_perturb, data_dict, model_arch=None,
-                 X_train_path=None, optimization_params=dict(), SAVE=False, save_dir=None, patch_id=None, threshold=0.5):
+def generate_cf(X_orig, 
+                y_orig, 
+                model_path, 
+                channel_to_perturb, 
+                data_dict, 
+                model_arch=None,
+                X_train_path=None, 
+                optimization_params=dict(), 
+                SAVE=False, 
+                save_dir=None, 
+                patch_id=None, 
+                threshold=0.5):
+    """
+    Generate counterfactuals for a given patch.
+    Parameters
+    ----------
+    X_orig : numpy array
+        Original patch to be explained.
+    y_orig : numpy array
+        Original label of the patch.
+    model_path : str
+        Path to the model.
+    channel_to_perturb : list
+        List of channels to perturb.
+    data_dict : dict
+        Dictionary containing the mean and standard deviation of each channel.
+    model_arch : str
+        Model architecture. Either 'mlp' or 'cnn'.
+    X_train_path : str
+        Path to the training data.
+    optimization_params : dict
+        Dictionary containing the parameters for the optimization.
+    SAVE : bool
+        Whether to save the counterfactual.
+    save_dir : str
+        Directory where output will be saved.
+    patch_id : str
+        ID of the patch.
+    threshold : float
+        Threshold for the prediction probability.
+    Returns
+    -------
+    None
+    """
     # Obtain data features
     channel, sigma, mu = np.array(data_dict['channel']), data_dict['stdev'], data_dict['mean']
     H, _, C = X_orig.shape
@@ -131,10 +172,6 @@ def alter_image(y, unnormed_patch, mu, sigma, unnormed_mean):
     unnormed_y = y*sigma + mu
     new_patch = unnormed_patch*((unnormed_y/unnormed_mean)[:,None,None,:])
     return (new_patch-mu)/sigma
-
-def load_object(filename):
-    with open(filename, 'rb') as outp: 
-        return pickle.load(outp)
     
 def add_init_layer(init_fun, model):
     class input_fun(torch.nn.Module):
@@ -149,10 +186,3 @@ def mean_skipfew(ufunc, foo, preserveAxis=None):
     if preserveAxis is not None:
         preserveAxis = tuple(np.delete(r, preserveAxis))
     return ufunc(foo, axis=preserveAxis)
-
-class LambdaLayer(torch.nn.Module):
-    def __init__(self, lambd):
-        super(LambdaLayer, self).__init__()
-        self.lambd = lambd
-    def forward(self, x):
-        return self.lambd(x)

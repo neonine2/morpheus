@@ -1,14 +1,13 @@
 import numpy as np
 import pandas as pd
-import pickle
 import os
 import json
 import warnings
 import seaborn as sns
-from src.utils.my_models import *
-from src.utils.imcwrangler import *
+from src.utils.my_models import TissueClassifier
+from src.utils.imcwrangler import patch_to_matrix
+import torch
 
-import statsmodels.api as sm
 from statsmodels.stats import multitest
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error

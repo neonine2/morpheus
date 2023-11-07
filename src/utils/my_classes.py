@@ -2,7 +2,6 @@ import pandas as pd
 import os
 import numpy as np
 import torch
-import torch.nn.functional as F
 from torchvision import transforms
 from torch.utils.data import DataLoader
 import pickle

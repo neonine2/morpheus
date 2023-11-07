@@ -1,12 +1,10 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-import numpy as np
 import pytorch_lightning as pl
-# from pytorch_lightning.callbacks import TQDMProgressBar
-import torchmetrics.functional.classification as tfcl
 
-# import torchvision as tv
+import torchmetrics.functional.classification as tfcl
+import torchvision as tv
 # import tensorflow as tf
 # import tensorflow_addons as tfa
 
@@ -77,7 +75,7 @@ class TissueClassifier(pl.LightningModule):
         x, target = batch
         target = F.one_hot(target, num_classes=self.classes).float()
         pred = self.predictor(x)
-        metric_dict = log_metrics(mode, pred, target)
+        metric_dict = self.log_metrics(mode, pred, target)
         return metric_dict
 
     def training_step(self, train_batch, batch_idx):
@@ -97,31 +95,32 @@ class TissueClassifier(pl.LightningModule):
         optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
         return optimizer
 
-def log_metrics(mode, preds, target):
-    # classification metrics
-    if preds.shape[1] == 1:
-        # Create a new column that is 1 minus the first column
-        new_col = 1 - preds[:, 0]
-        # Append the new column to the original matrix
-        preds = torch.column_stack((preds, new_col))
-    bce = F.binary_cross_entropy_with_logits(preds, target)
-    
-    preds = torch.argmax(preds, dim=1).float()
-    target = torch.argmax(target, dim=1).float()
-    test_acc = tfcl.binary_accuracy(preds, target)
-    bmc = tfcl.binary_matthews_corrcoef(preds, target).float()
-    auroc = tfcl.binary_auroc(preds,target)
-    f1 = tfcl.binary_f1_score(preds,target)
-    precision = tfcl.binary_precision(preds,target)
-    recall = tfcl.binary_recall(preds,target)
-    metric_dict = {mode+'_bce':bce, 
-                   mode+'_precisio1n':precision, 
-                   mode+'_recall':recall,
-                   mode+'_bmc':bmc,
-                   mode+'_auroc':auroc,
-                   mode+'_f1':f1,
-                   mode+'_acc':test_acc}
-    return metric_dict
+    @staticmethod
+    def log_metrics(mode, preds, target):
+        # classification metrics
+        if preds.shape[1] == 1:
+            # Create a new column that is 1 minus the first column
+            new_col = 1 - preds[:, 0]
+            # Append the new column to the original matrix
+            preds = torch.column_stack((preds, new_col))
+        bce = F.binary_cross_entropy_with_logits(preds, target)
+        
+        preds = torch.argmax(preds, dim=1).float()
+        target = torch.argmax(target, dim=1).float()
+        test_acc = tfcl.binary_accuracy(preds, target)
+        bmc = tfcl.binary_matthews_corrcoef(preds, target).float()
+        auroc = tfcl.binary_auroc(preds,target)
+        f1 = tfcl.binary_f1_score(preds,target)
+        precision = tfcl.binary_precision(preds,target)
+        recall = tfcl.binary_recall(preds,target)
+        metric_dict = {mode+'_bce':bce, 
+                    mode+'_precisio1n':precision, 
+                    mode+'_recall':recall,
+                    mode+'_bmc':bmc,
+                    mode+'_auroc':auroc,
+                    mode+'_f1':f1,
+                    mode+'_acc':test_acc}
+        return metric_dict
     
 def get_prediction(model, data_loader):
     m = nn.Softmax(dim=1)

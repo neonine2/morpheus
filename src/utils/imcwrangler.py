@@ -1,6 +1,4 @@
 import numpy as np
-import pandas as pd
-
 
 def image_to_patch(df, patch_dim, width=None, height=None, recinterval=True):
     df = df.copy(deep=True)

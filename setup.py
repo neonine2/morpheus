@@ -21,14 +21,14 @@ extras_require = {
 }
 
 if __name__ == '__main__':
-    setup(name='deepspace',
+    setup(name='morpheus',
           author='Zitong Wang',
           author_email='zwang2@caltech.edu',
           version=__version__,  # type: ignore # noqa F821
-          description='Morpheus countefactual optimization',
+          description='Morpheus tissue countefactual optimization',
           long_description=readme(),
           long_description_content_type='text/markdown',
-          url='https://github.com/neonine2/deepSpace',
+          url='https://github.com/neonine2/morpheus',
           license="Apache 2.0",
           packages=find_packages(),
           include_package_data=True,

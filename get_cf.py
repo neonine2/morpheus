@@ -3,8 +3,8 @@ import numpy as np
 import time
 import torch
 import tensorflow.compat.v1 as tf
-from src.explainers.cfproto import CounterfactualProto
-from src.utils.my_models import TissueClassifier
+from morpheus.explainers.cfproto import CounterfactualProto
+from morpheus.utils.my_models import TissueClassifier
 
 EPSILON = 1e-20
 

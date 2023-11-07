@@ -2,10 +2,10 @@ import torch
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint,TQDMProgressBar
 import pytorch_lightning as pl
 
-from src.utils.data_prep import *
-from src.utils.my_classes import make_torch_dataloader, set_seed
-from src.utils.my_models import *
-from src.utils.plotting_fun import *
+from utils.data_prep import *
+from utils.my_classes import make_torch_dataloader, set_seed
+from utils.my_models import *
+from utils.plotting_fun import *
 
 # Function for setting the seed
 set_seed(42)

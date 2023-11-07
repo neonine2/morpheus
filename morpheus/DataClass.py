@@ -4,8 +4,8 @@ import os
 import json
 import warnings
 import seaborn as sns
-from src.utils.my_models import TissueClassifier
-from src.utils.imcwrangler import patch_to_matrix
+from morpheus.utils.my_models import TissueClassifier
+from morpheus.utils.imcwrangler import patch_to_matrix
 import torch
 
 from statsmodels.stats import multitest

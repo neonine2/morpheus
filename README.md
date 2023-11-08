@@ -26,8 +26,28 @@ Clone the repository and install the required packages:
 git clone https://github.com/your-username/morpheus.git
 cd morpheus
 pip install -r requirements.txt
+```
 
 ### Usage
+To run Morpheus on your data, follow the instructions below:
+```bash
 python morpheus.py --data /path/to/your/data.csv
+```
+
+## Documentation
+For more detailed usage and API documentation, please refer to the `docs` folder.
+
+## Contributing
+We welcome contributions to Morpheus. If you would like to contribute, please fork the repository and create a pull request with your features or fixes.
+
+## License
+Morpheus is released under the MIT License. See the `LICENSE` file for more details.
+
+## Citation
+If you use Morpheus in your research, please cite this repository.
+
+## Contact
+For questions and feedback, please open an issue in the GitHub repository issue tracker.
+
 
 

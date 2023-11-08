@@ -4,7 +4,7 @@ import time
 import torch
 import tensorflow.compat.v1 as tf
 from morpheus.explainers.cfproto import CounterfactualProto
-from morpheus.utils.my_models import TissueClassifier
+from morpheus.morpheus.utils.models import TissueClassifier
 
 EPSILON = 1e-20
 

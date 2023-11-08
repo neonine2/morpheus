@@ -1,11 +1,12 @@
-import torch
+import os
+
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint,TQDMProgressBar
 import pytorch_lightning as pl
 
-from utils.data_prep import *
-from utils.my_classes import make_torch_dataloader, set_seed
-from utils.my_models import *
-from utils.plotting_fun import *
+from utils.data_prep import generate_split_from_data
+from utils.dataset import make_torch_dataloader, set_seed
+from utils.models import TissueClassifier
+# from utils.plotting_fun import *
 
 # Function for setting the seed
 set_seed(42)

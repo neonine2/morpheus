@@ -4,7 +4,7 @@ import os
 import json
 import warnings
 import seaborn as sns
-from morpheus.utils.my_models import TissueClassifier
+from morpheus.morpheus.utils.models import TissueClassifier
 from morpheus.utils.imcwrangler import patch_to_matrix
 import torch
 

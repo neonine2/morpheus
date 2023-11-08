@@ -4,41 +4,13 @@ from torch.nn import functional as F
 import pytorch_lightning as pl
 
 import torchmetrics.functional.classification as tfcl
-import torchvision as tv
-# import tensorflow as tf
-# import tensorflow_addons as tfa
 
 class TissueClassifier(pl.LightningModule):
-    def __init__(self, in_channels, img_size=None, modelArch=None, num_target_classes=2):
+    def __init__(self, in_channels, img_size=16, modelArch='unet', num_target_classes=2):
         super().__init__()
         self.classes = num_target_classes
         modelArch = modelArch.lower()
-        if modelArch == 'resnet':
-            # init a pretrained resnet
-            backbone = tv.models.resnet50(weights="DEFAULT")
-            num_filters = backbone.fc.in_features
-            layers = list(backbone.children())[:-1]
-            layers[0] = nn.Conv2d(in_channels, 64, kernel_size=(7, 7), stride=(2, 2), 
-                                                    padding=(3, 3), bias=False)
-            layers.append(nn.Flatten())
-            layers.append(nn.Linear(num_filters, num_target_classes))
-            layers.append(nn.Softmax())
-            self.predictor = nn.Sequential(*layers)
-        elif modelArch == 'cnn':
-            self.predictor = nn.Sequential(
-                nn.Conv2d(in_channels, 64, 3),
-                nn.ReLU(),
-                nn.MaxPool2d(2, 2),
-                nn.Conv2d(64, 128, 3),
-                nn.ReLU(),
-                nn.Dropout(p=0.3),
-                nn.Flatten(),
-                nn.Linear(128*7*7, 60),
-                nn.ReLU(),
-                nn.Dropout(p=0.8),
-                nn.Linear(60, num_target_classes),
-                nn.Softmax())
-        elif modelArch == 'unet':
+        if modelArch == 'unet':
             backbone = torch.hub.load('mateuszbuda/brain-segmentation-pytorch', 'unet',
                                 in_channels=in_channels, 
                                 out_channels=1, 
@@ -90,10 +62,6 @@ class TissueClassifier(pl.LightningModule):
     def test_step(self, test_batch, batch_idx):
         metric_dict=self.execute_and_get_metric(test_batch, 'test')
         self.log_dict(metric_dict, prog_bar=True)
-
-    def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.001)
-        return optimizer
 
     @staticmethod
     def log_metrics(mode, preds, target):

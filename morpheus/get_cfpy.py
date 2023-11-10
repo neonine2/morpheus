@@ -2,11 +2,10 @@ import os
 import numpy as np
 import time
 import torch
-import tensorflow.compat.v1 as tf
-from morpheus.explainers.cfproto import CounterfactualProto
-from morpheus.morpheus.utils.models import TissueClassifier
+from explainers.pyproto import CounterfactualProto
+from utils.models import TissueClassifier
 
-EPSILON = 1e-20
+EPSILON = torch.tensor(1e-20, dtype=torch.float32)
 
 def generate_cf(X_orig, 
                 y_orig, 
@@ -53,16 +52,14 @@ def generate_cf(X_orig,
     None
     """
     # Obtain data features
-    channel, sigma, mu = np.array(data_dict['channel']), data_dict['stdev'], data_dict['mean']
+    channel, sigma, mu = np.array(data_dict['channel']), torch.from_numpy(data_dict['stdev']).float(), torch.from_numpy(data_dict['mean']).float()
     H, _, C = X_orig.shape
-    X_orig = (X_orig - mu)/sigma
-    X_mean = np.mean(X_orig,axis=(0,1))
+    X_orig = (torch.from_numpy(X_orig).float() - mu)/sigma
+    y_orig = torch.from_numpy(y_orig).long()
+    X_mean = torch.mean(X_orig, dim=(0,1))
     
     if model_arch == 'mlp':
         X_orig = X_mean
-        
-    # initialize model
-    tf.disable_eager_execution()
 
     print('Loading model')
     model = TissueClassifier.load_from_checkpoint(model_path, 
@@ -76,35 +73,38 @@ def generate_cf(X_orig,
     unnormed_mean = X_mean*sigma+mu
     if model_arch == 'mlp':
         def altered_model(x): 
-            return torch.nn.functional.softmax(model(torch.from_numpy(x).float()),dim=1)
+            return torch.nn.functional.softmax(model(x),dim=1)
         def input_transform(x): return x
     else:
         print('Modifying model')
         unnormed_patch = X_orig[None,:]*sigma+mu
         def init_fun(y):
             return alter_image(y, unnormed_patch, mu, sigma, unnormed_mean)
-        altered_model, input_transform = add_init_layer(init_fun,model)
+        altered_model, input_transform = add_init_layer(init_fun, model)
 
     # Set range of each channel to perturb
     channel_to_perturb = [name for name in channel if name in channel_to_perturb] # IMPORTANT: keep channel in appropriate order
     isPerturbed = np.array([True if name in channel_to_perturb 
                             else False for name in channel])
-    feature_range = (np.maximum(-mu/sigma, np.ones(C)*-4),np.ones(C)*4)
+    feature_range = (torch.maximum(-mu/sigma, torch.ones(C)*-4), torch.ones(C)*4)
     feature_range[0][~isPerturbed] = X_mean[~isPerturbed]-EPSILON
     feature_range[1][~isPerturbed] = X_mean[~isPerturbed]+EPSILON
 
     # define predict function
-    predict_fn = lambda x: altered_model(x).detach().numpy()
+    predict_fn = lambda x: altered_model(x)
     
     print('check instance')
     # Terminate if model incorrectly classifies patch as the target class
     target_class = optimization_params.pop('target_class')
-    print(predict_fn(X_mean[None,]))
-    pred = predict_fn(X_mean[None,])[0,1] > threshold
+    orig_proba = predict_fn(X_mean[None,])
+    print('initial probability: ', orig_proba)
+    pred = orig_proba[0,1] > threshold
     if pred == target_class:
         print('instance already classified as target class, no counterfactual needed')
         return 
     
+    # define counterfactual object
+    print('defining counterfactual object')
     shape = (1,) + X_orig.shape
     cf = CounterfactualProto(predict_fn, input_transform, shape, 
                              feature_range=feature_range, 
@@ -121,7 +121,7 @@ def generate_cf(X_orig,
             X_t = torch.permute(torch.from_numpy(X_train), (0,3,1,2)).float()
         preds = np.argmax(model(X_t).detach().numpy(), axis=1)
 
-        X_train = np.mean(X_train,axis=(1,2))
+        X_train = torch.mean(X_train,dim=(1,2))
         cf.fit(X_train, preds)
     else:
         cf.fit()
@@ -176,7 +176,7 @@ def alter_image(y, unnormed_patch, mu, sigma, unnormed_mean):
 def add_init_layer(init_fun, model):
     class input_fun(torch.nn.Module):
         def forward(self, input):
-            return torch.permute(torch.from_numpy(init_fun(input)), (0,3,1,2)).float()
+            return torch.permute(init_fun(input), (0,3,1,2)).float()
     input_transform = input_fun()
     completeModel = torch.nn.Sequential(input_transform, model)
     return completeModel, input_transform

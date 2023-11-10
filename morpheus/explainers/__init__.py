@@ -1,4 +1,4 @@
-from .cfproto import CounterfactualProto
+from .pyproto import CounterfactualProto
 
 __all__ = [
     "CounterfactualProto"

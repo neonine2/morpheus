@@ -9,8 +9,8 @@ import pprint
 
 import attr
 
-from morpheus.saving import NumpyEncoder
-from morpheus.version import __version__
+from saving import NumpyEncoder
+from version import __version__
 
 logger = logging.getLogger(__name__)
 

@@ -4,8 +4,7 @@ Note that the "name" field is automatically populated upon initialization of the
 Explainer class.
 """
 
-# CFProto
-DEFAULT_META_CFP = {"name": None,
+DEFAULT_META = {"name": None,
                     "type": ["blackbox", "tensorflow", "keras"],
                     "explanations": ["local"],
                     "params": {},
@@ -14,7 +13,7 @@ DEFAULT_META_CFP = {"name": None,
 Default counterfactual prototype metadata.
 """
 
-DEFAULT_DATA_CFP = {"cf": None,
+DEFAULT_DATA = {"cf": None,
                     "all": [],
                     "orig_class": None,
                     "orig_proba": None,

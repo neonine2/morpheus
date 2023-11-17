@@ -38,7 +38,8 @@ class CounterfactualProto(Explainer, FitMixin):
                  eps: tuple = (1e-3, 1e-3),
                  clip: tuple = (-1000., 1000.),
                  update_num_grad: int = 1,
-                 trustscore: Optional[str] = None) -> None:
+                 trustscore: Optional[str] = None,
+                 verbose: bool = False) -> None:
         """
         Initialize prototypical counterfactual method.
 
@@ -149,6 +150,7 @@ class CounterfactualProto(Explainer, FitMixin):
         self.clip = clip
         self.input_transform = input_transform
         self.learning_rate_init = learning_rate_init
+        self.verbose = verbose
 
         # variable for target class proto
         if self.enc_model:
@@ -171,17 +173,17 @@ class CounterfactualProto(Explainer, FitMixin):
         self.assign_adv = cond_0.float() * upper + cond_1.float() * self.orig + cond_2.float() * lower
 
     def compute_perturbation_projection(self):
-        # Perturbation update and vector projection on correct feature range set
+        # perturbation update (momentum term)
         self.zt = self.global_step / (self.global_step + 3.0)
         self.assign_adv_s = self.assign_adv + self.zt * (self.assign_adv - self.adv)
         
-        # Map to feature space
+        # vector projection on correct feature range set
         self.assign_adv_s = torch.clamp(self.assign_adv_s, self.feature_range[0], self.feature_range[1])
     
     def update_counterfactuals(self):
-        # Update counterfactuals
+        # Update counterfactuals of step k+1 to k
         self.adv = self.assign_adv.clone()
-        self.adv_s = self.assign_adv_s.clone()
+        self.adv_s.data = self.assign_adv_s.data.clone()
 
     def compute_deviations(self):
         # Derive deviations
@@ -336,63 +338,6 @@ class CounterfactualProto(Explainer, FitMixin):
                 print('trustscore file loaded')
         return self
 
-    def get_gradients(self, X: np.ndarray, Y: np.ndarray, grads_shape: tuple) -> np.ndarray:
-        """
-        Compute numerical gradients of the attack loss term:
-        `dL/dx = (dL/dP)*(dP/dx)` with `L = loss_attack_s; P = predict; x = adv_s`.
-
-        Parameters
-        ----------
-        X
-            Instance around which gradient is evaluated.
-        Y
-            One-hot representation of instance labels.
-        grads_shape
-            Shape of gradients.
-
-        Returns
-        -------
-        Array with gradients.
-        """
-        X_pred = X
-        # N = gradient batch size; F = nb of features; P = nb of prediction classes; B = instance batch size
-        # dL/dP -> BxP
-        preds = self.predict(X_pred)  # NxP
-        preds_pert_pos, preds_pert_neg = perturb(preds, self.eps[0], proba=True)  # (N*P)xP
-
-        def f(preds_pert):
-            return np.sum(Y * preds_pert, axis=1)
-
-        def g(preds_pert):
-            return np.max((1 - Y) * preds_pert, axis=1)
-
-        # find instances where the gradient is 0
-        idx_nograd = np.where(f(preds) - g(preds) <= - self.kappa)[0]
-        if len(idx_nograd) == X.shape[0]:
-            return np.zeros((1,*X.shape[1:]))
-        dl_df = f(preds_pert_pos) - f(preds_pert_neg)  # N*P
-        dl_dg = g(preds_pert_pos) - g(preds_pert_neg)  # N*P
-        dl_dp = dl_df - dl_dg  # N*P
-        dl_dp = np.reshape(dl_dp, (X.shape[0], -1)) / (2 * self.eps[0])  # NxP
-
-        # dP/dx -> PxF
-        X_pert_pos, X_pert_neg = perturb(X, self.eps[1], proba=False)  # (N*F)x(shape of X[0])
-        X_pert = np.concatenate([X_pert_pos, X_pert_neg], axis=0)
-        preds_concat = self.predict(X_pert)
-        n_pert = X_pert_pos.shape[0]
-        dp_dx = preds_concat[:n_pert] - preds_concat[n_pert:]  # (N*F)*P
-        dp_dx = np.reshape(np.reshape(dp_dx, (X.shape[0], -1)),
-                           (X.shape[0], preds.shape[1], -1), order='F') / (2 * self.eps[1])  # NxPxF
-
-        # dL/dx -> Bx(shape of X[0])
-        grads = np.einsum('ij,ijk->ik', dl_dp, dp_dx)  # NxF
-        # set instances where gradient is 0 to 0
-        if len(idx_nograd) > 0:
-            grads[idx_nograd] = np.zeros(grads.shape[1:])
-        grads = np.mean(grads, axis=0)  # B*F
-        grads = np.reshape(grads, (self.batch_size,) + grads_shape)  # B*(shape of X[0])
-        return grads
-
     def score(self, X: np.ndarray, adv_class: int, orig_class: int, eps: float = 1e-10) -> float:
         """
         Parameters
@@ -489,7 +434,7 @@ class CounterfactualProto(Explainer, FitMixin):
             -------
             Bool whether counterfactual conditions hold.
             """
-            if not isinstance(x, (float, int, np.int64)):
+            if (not isinstance(x, (float, int, np.int64))) and (not is_single_float_or_int_tensor(x)):
                 x = x.clone()
                 x[y] += self.kappa  # type: ignore
                 x = torch.argmax(x)  # type: ignore
@@ -499,7 +444,7 @@ class CounterfactualProto(Explainer, FitMixin):
         if target_class is None:
             target_class = list(range(self.classes))
             target_class.remove(np.argmax(Y, axis=1))
-            if verbose:
+            if self.verbose:
                 print('Predicted class: {}'.format(np.argmax(Y, axis=1)))
                 print('Target classes: {}'.format(target_class))
         X_num = X
@@ -539,7 +484,7 @@ class CounterfactualProto(Explainer, FitMixin):
         if self.enc_or_kdtree:
             self.id_proto = min(dist_proto, key=dist_proto.get)  # type: ignore[arg-type]
             proto_val = self.class_proto[self.id_proto]
-            if verbose:
+            if self.verbose:
                 print('Prototype class: {}'.format(self.id_proto))
         else:  # no prototype loss term used
             proto_val = np.zeros(self.shape_enc)
@@ -579,43 +524,31 @@ class CounterfactualProto(Explainer, FitMixin):
             self.global_step = 0
         
             for i in range(self.max_iterations):
-                
-                self.optimizer = optim.SGD([self.adv_s], lr=self.learning_rate_init)
                 # Zero out the gradients before computation at every step
                 self.optimizer.zero_grad()
 
-                # Compute the loss
-                self.compute_combined_loss() # Assuming you have a function that computes the total loss
+                # Compute the forward loss
+                self.compute_combined_loss()
 
-                # Compute gradients
-                print(self.loss_opt)
-                self.loss_opt.backward() # Compute gradients using PyTorch's autograd
+                # Compute gradients in backward pass
+                self.loss_opt.backward()
 
                 # Clip the gradients
                 with torch.no_grad():
                     self.adv_s.grad.clamp_(self.clip[0], self.clip[1])
                 gradients = self.adv_s.grad
-                print(gradients)
 
                 # Apply the gradients
-                print(self.adv_s)
                 self.optimizer.step()
-                # with torch.no_grad():
-                #     self.adv_s -= self.optimizer.param_groups[0]['lr'] * self.adv_s.grad
-                print(self.adv_s)
 
                 # Update the learning rate
                 self.learning_rate.step()
 
-                # Increment the global step
-                self.global_step += 1
-
                 # update adv and adv_s
-                self.compute_shrinkage_thresholding(self.feature_range)
-                self.compute_perturbation_projection() 
-                self.update_counterfactuals()
-                print(self.adv_s)
-                self.adv_s = self.adv_s.detach().clone().requires_grad_()
+                with torch.no_grad():
+                    self.compute_shrinkage_thresholding(self.feature_range)
+                    self.compute_perturbation_projection() 
+                    self.update_counterfactuals()
 
                 # compute overall and attack loss, L1+L2 loss, prediction probabilities
                 # on perturbed instances and new adv
@@ -626,9 +559,9 @@ class CounterfactualProto(Explainer, FitMixin):
                     target_proba = torch.sum(self.pred_proba * Y)
                     nontarget_proba_max = torch.max((1 - Y) * self.pred_proba)
 
-                if verbose and i % print_every == 0:
+                if self.verbose and i % print_every == 0:
                     print('\nIteration: {}; Const: {}'.format(i, const[0]))
-                    print('Loss total: {:.3f}, loss attack: {:.3f}'.format(self.loss_tot, self.loss_attack))
+                    print('Loss total: {:.3f}, loss attack: {:.3f}'.format(self.loss_total, self.loss_attack))
                     print('L2: {:.3f}, L1: {:.3f}, loss AE: {:.3f}'.format(self.loss_l2, self.loss_l1, self.loss_ae))
                     print('Loss proto: {:.3f}'.format(self.loss_proto))
                     print('Target proba: {:.2f}, max non target proba: {:.2f}'.format(target_proba,
@@ -664,17 +597,21 @@ class CounterfactualProto(Explainer, FitMixin):
                             and above_threshold and adv_class in target_class):
                         current_best_dist[batch_idx] = dist
                         current_best_proba[batch_idx] = adv_class  # type: ignore
+                        print(adv_class)
 
                     # global
                     if (dist < overall_best_dist[batch_idx] and compare(proba, Y_class)  # type: ignore
                             and above_threshold and adv_class in target_class):
-                        if verbose:
+                        if self.verbose:
                             print('\nNew best counterfactual found!')
                         overall_best_dist[batch_idx] = dist
                         overall_best_attack[batch_idx] = adv_idx
                         overall_best_grad = gradients
                         self.best_attack = True
                         self.cf_global[_].append(adv_idx)
+                
+                # Increment the global step
+                self.global_step += 1
 
             # adjust the 'c' constant for the first loss term
             for batch_idx in range(self.batch_size):
@@ -709,7 +646,6 @@ class CounterfactualProto(Explainer, FitMixin):
                 k: Optional[int] = None,
                 k_type: str = 'mean',
                 threshold: float = 0.,
-                verbose: bool = False,
                 print_every: int = 100) -> Explanation:
         """
         Explain instance and return counterfactual with metadata.
@@ -767,7 +703,7 @@ class CounterfactualProto(Explainer, FitMixin):
         # find best counterfactual
         self.best_attack = False # flag to indicate whether a CF was found
         best_attack, grads = self.attack(X, Y=Y, target_class=target_class, k=k, k_type=k_type,
-                                         verbose=verbose, threshold=threshold,
+                                         verbose=self.verbose, threshold=threshold,
                                          print_every=print_every)
 
         # add id of prototype to explanation dict
@@ -785,10 +721,10 @@ class CounterfactualProto(Explainer, FitMixin):
         data['all'] = self.cf_global
         data['cf'] = {}
         data['cf']['X'] = best_attack
-        Y_pert = self.predict(best_attack)
+        Y_pert = self.predict(torch.from_numpy(best_attack)).detach().numpy()
         data['cf']['proba'] = Y_pert
         data['cf']['class'] = np.argmax(Y_pert, axis=1)[0]
-        data['cf']['grads_graph'], data['cf']['grads_num'] = grads[0], grads[1]
+        data['cf']['grads'] = grads.detach().numpy()
 
         # create explanation object
         explanation = Explanation(meta=copy.deepcopy(self.meta), data=data)
@@ -802,3 +738,15 @@ def save_object(obj, filename):
 def load_object(filename):
     with open(filename, 'rb') as outp: 
         return pickle.load(outp)
+    
+def is_single_float_or_int_tensor(x):
+    # Check if x is a tensor and has only one element
+    if isinstance(x, torch.Tensor) and x.numel() == 1:
+        # Check for integer types (can include more types if needed)
+        if x.dtype in [torch.int32, torch.int64, torch.int16, torch.int8]:
+            return True
+        # Check for float types (can include more types if needed)
+        elif x.dtype in [torch.float32, torch.float64, torch.float16]:
+            return True
+        # Add more conditions if you want to check for other specific types
+    return False

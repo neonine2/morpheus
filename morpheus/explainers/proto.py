@@ -38,7 +38,8 @@ class CounterfactualProto(Explainer, FitMixin):
                  update_num_grad: int = 1,
                  trustscore: Optional[str] = None,
                  write_dir: Optional[str] = None,
-                 sess: Optional[tf.Session] = None) -> None:
+                 sess: Optional[tf.Session] = None,
+                 verbose: bool = False) -> None:
         """
         Initialize prototypical counterfactual method.
 
@@ -725,7 +726,12 @@ class CounterfactualProto(Explainer, FitMixin):
                     feed_dict = {self.loss_attack: loss_attack}
                     loss_tot, loss_l1_l2, adv = self.sess.run([self.loss_total, self.l1_l2, self.adv],
                                                               feed_dict=feed_dict)
-
+                loss_l2, loss_l1, loss_ae, loss_proto = \
+                        self.sess.run([self.loss_l2, self.loss_l1, self.loss_ae, self.loss_proto])
+                target_proba = np.sum(pred_proba * Y)
+                nontarget_proba_max = np.max((1 - Y) * pred_proba)
+                loss_opt = loss_l1_l2 + loss_attack + loss_ae + loss_proto
+                print(loss_opt)
                 if i % log_every == 0 or i % print_every == 0:
                     loss_l2, loss_l1, loss_ae, loss_proto = \
                         self.sess.run([self.loss_l2, self.loss_l1, self.loss_ae, self.loss_proto])

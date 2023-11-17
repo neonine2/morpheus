@@ -107,7 +107,7 @@ def generate_cf(X_orig,
     print('defining counterfactual object')
     shape = (1,) + X_orig.shape
     cf = CounterfactualProto(predict_fn, input_transform, shape, 
-                             feature_range=feature_range, 
+                             feature_range=feature_range,
                              **optimization_params)
 
     print('Building kdtree')
@@ -129,29 +129,30 @@ def generate_cf(X_orig,
     print('kdtree built!')
     t1 = time.time()
     explanation = cf.explain(X=X_mean[None,:], Y=y_orig[None,:], 
-                             target_class=[target_class], verbose=False)
+                             target_class=[target_class])
     t2 = time.time()
     print(f'explain step time elapsed = {t2 - t1}')
 
     if explanation.cf is not None:
         cf_prob = explanation.cf['proba'][0]
         cf = explanation.cf['X'][0]
-        
-        print(f'compute probability: {predict_fn(cf[None,])}')
-        cf = input_transform(cf[None,])
+
+        # manually compute probability of cf
+        cf = input_transform(torch.from_numpy(cf[None,]))
         if model_arch == 'mlp':
             pred_proba = altered_model(cf)
         else:
             pred_proba = model(cf)
         if model_arch != 'mlp':
-            cf = torch.permute(cf, (0,2,3,1)).numpy()
+            cf = torch.permute(cf, (0,2,3,1))
 
         print(f"cf probability: {cf_prob}")
         print(f"compute probability: {pred_proba}")
-        X_perturbed = mean_skipfew(np.mean, cf*sigma+mu, preserveAxis=cf.ndim-1)
+        X_perturbed = mean_preserve_dimensions(cf*sigma+mu, preserveAxis=cf.ndim-1)
         X_orig = X_mean*sigma+mu
         cf_delta = (X_perturbed  - X_orig) / X_orig * 100 
-        cf_perturbed = dict(zip(channel[isPerturbed],cf_delta[isPerturbed]))
+        print(f"cf delta: {cf_delta}")
+        cf_perturbed = dict(zip(channel[isPerturbed],cf_delta[isPerturbed].numpy()))
         print(f"cf perturbed: {cf_perturbed}")
 
         if SAVE:
@@ -181,8 +182,11 @@ def add_init_layer(init_fun, model):
     completeModel = torch.nn.Sequential(input_transform, model)
     return completeModel, input_transform
 
-def mean_skipfew(ufunc, foo, preserveAxis=None):
-    r = np.arange(foo.ndim)   
-    if preserveAxis is not None:
-        preserveAxis = tuple(np.delete(r, preserveAxis))
-    return ufunc(foo, axis=preserveAxis)
+def mean_preserve_dimensions(tensor, preserveAxis=None):
+    if isinstance(preserveAxis, int):
+        preserveAxis = (preserveAxis,)
+
+    # Compute the mean along all dimensions except those in preserveAxis
+    dims_to_reduce = [i for i in range(tensor.ndim) if i not in preserveAxis]
+    result = tensor.mean(dim=dims_to_reduce)
+    return result

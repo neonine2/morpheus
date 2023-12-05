@@ -1,35 +1,34 @@
 import os
 import copy
-import logging
 import sys
 import _pickle as pickle
-from typing import Any, Callable, Optional, Tuple, Union
+from typing import Callable, Optional, Tuple, Union
 import numpy as np
+import warnings
 
 import torch
-import torch.nn as nn
 import torch.optim as optim
 
-from morpheus.api.defaults import DEFAULT_DATA_CFP, DEFAULT_META_CFP
-from morpheus.api.interfaces import Explainer, Explanation, FitMixin
-from morpheus.confidence import TrustScore
-from morpheus.utils.gradients import perturb
+from api.defaults import DEFAULT_DATA, DEFAULT_META
+from api.interfaces import Explainer, Explanation, FitMixin
+from confidence import TrustScore
+from utils.gradients import perturb
 
-logger = logging.getLogger(__name__)
-tf.logging.set_verbosity(tf.logging.ERROR)
+# logger = logging.getLogger(__name__)
+# tf.logging.set_verbosity(tf.logging.ERROR)
 
 class CounterfactualProto(Explainer, FitMixin):
 
     def __init__(self,
-                 predict: Union[Callable[[np.ndarray], np.ndarray], tf.keras.Model],
-                 input_transform: Union[Callable[[np.ndarray], np.ndarray], tf.keras.Model],
+                 predict: Union[Callable[[np.ndarray], np.ndarray], torch.nn.Module],
+                 input_transform: Union[Callable[[np.ndarray], np.ndarray], torch.nn.Module],
                  shape: tuple,
                  kappa: float = 0.,
                  beta: float = .1,
                  feature_range: Tuple[Union[float, np.ndarray], Union[float, np.ndarray]] = (-1e10, 1e10),
                  gamma: float = 0.,
-                 ae_model: Optional[tf.keras.Model] = None,
-                 enc_model: Optional[tf.keras.Model] = None,
+                 ae_model: Optional[torch.nn.Module] = None,
+                 enc_model: Optional[torch.nn.Module] = None,
                  theta: float = 0.,
                  use_kdtree: bool = False,
                  learning_rate_init: float = 1e-2,
@@ -40,14 +39,14 @@ class CounterfactualProto(Explainer, FitMixin):
                  clip: tuple = (-1000., 1000.),
                  update_num_grad: int = 1,
                  trustscore: Optional[str] = None,
-                 sess: Optional[tf.Session] = None) -> None:
+                 verbose: bool = False) -> None:
         """
         Initialize prototypical counterfactual method.
 
         Parameters
         ----------
         predict
-            `tensorflow` model or any other model's prediction function returning class probabilities.
+            `pytorch` model's prediction function returning class probabilities.
         shape
             Shape of input data starting with batch size.
         kappa
@@ -90,7 +89,7 @@ class CounterfactualProto(Explainer, FitMixin):
         sess
             Optional `tensorflow` session that will be used if passed instead of creating or inferring one internally.
         """
-        super().__init__(meta=copy.deepcopy(DEFAULT_META_CFP))
+        super().__init__(meta=copy.deepcopy(DEFAULT_META))
 
         # if image as input
         if len(shape) > 2:
@@ -99,34 +98,17 @@ class CounterfactualProto(Explainer, FitMixin):
         else:
             patch_shape = shape
         params = locals()
-        remove = ['self', 'predict', 'input_transform', 'ae_model', 'enc_model', 'sess', '__class__']
+        remove = ['self', 'predict', 'input_transform', 'ae_model', 'enc_model', '__class__']
         for key in remove:
             params.pop(key)
         self.meta['params'].update(params)
 
         self.predict = predict
         self.trustscore = trustscore
-
-        # check if the passed object is a model and get session
-        # is_model = isinstance(predict, tf.keras.Model)
-        # model_sess = tf.compat.v1.keras.backend.get_session()
-        # is_ae = isinstance(ae_model, tf.keras.Model)
-        # is_enc = isinstance(enc_model, tf.keras.Model)
-        # self.meta['params'].update(is_model=is_model, is_ae=is_ae, is_enc=is_enc)
-
-        # # if session provided, use it
-        # if isinstance(sess, tf.Session):
-        #     self.sess = sess
-        # else:
-        #     self.sess = model_sess
-
-        # if is_model:  # Keras or TF model
-        #     self.model = True
-        #     self.classes = self.predict.predict(np.zeros(shape)).shape[1]  # type: ignore
-        # else:  # black-box model
-        #     self.model = False
-        self.classes = self.predict(np.zeros(shape)).shape[1]
+        self.classes = self.predict(torch.zeros(size=shape)).shape[1]
         print(f'Pytorch model with {self.classes} classes')
+        is_ae = isinstance(ae_model, torch.nn.Module)
+        is_enc = isinstance(enc_model, torch.nn.Module)
 
         if is_enc:
             self.enc_model = True
@@ -139,7 +121,7 @@ class CounterfactualProto(Explainer, FitMixin):
             self.ae_model = False
 
         if use_kdtree and self.enc_model:
-            logger.warning('Both an encoder and k-d trees enabled. Using the encoder for the prototype loss term.')
+            warnings.warn('Both an encoder and k-d trees enabled. Using the encoder for the prototype loss term.')
 
         if use_kdtree or self.enc_model:
             self.enc_or_kdtree = True
@@ -158,15 +140,17 @@ class CounterfactualProto(Explainer, FitMixin):
         self.use_kdtree = use_kdtree
         self.batch_size = shape[0]
         self.max_iterations = max_iterations
-        self.c_init = c_init
+        self.c_init = torch.tensor(c_init, dtype=torch.float32)
         self.c_steps = c_steps
-        self.feature_range = tuple([(np.ones(shape[1:]) * feature_range[_])[None, :]
-                                    if isinstance(feature_range[_], float) else np.array(feature_range[_])
+        self.feature_range = tuple([(torch.ones(shape[1:]) * feature_range[_])[None, :]
+                                    if isinstance(feature_range[_], float) else feature_range[_]
                                     for _ in range(2)])
         self.update_num_grad = update_num_grad
         self.eps = eps
         self.clip = clip
         self.input_transform = input_transform
+        self.learning_rate_init = learning_rate_init
+        self.verbose = verbose
 
         # variable for target class proto
         if self.enc_model:
@@ -174,167 +158,6 @@ class CounterfactualProto(Explainer, FitMixin):
         else:
             # shape_env may not be equal to shape
             self.shape_enc = self.shape
-
-        # # define tf variables for original and perturbed instances, and target labels
-        # self.orig = tf.Variable(np.zeros(shape), dtype=tf.float32, name='orig')
-        # self.adv = tf.Variable(np.zeros(shape), dtype=tf.float32, name='adv')
-        # self.adv_s = tf.Variable(np.zeros(shape), dtype=tf.float32, name='adv_s')
-        # self.target = tf.Variable(np.zeros((self.batch_size, self.classes)), dtype=tf.float32, name='target')
-        # self.target_proto = tf.Variable(np.zeros(self.shape_enc), dtype=tf.float32, name='target_proto')
-
-        # define tf variable for constant used in FISTA optimization
-        # self.const = tf.Variable(np.zeros(self.batch_size), dtype=tf.float32, name='const')
-        self.global_step = tf.Variable(0.0, trainable=False, name='global_step')
-
-        # define placeholders that will be assigned to relevant variables
-        self.assign_orig = tf.placeholder(tf.float32, shape, name='assign_orig')
-        self.assign_adv = tf.placeholder(tf.float32, shape, name='assign_adv')
-        self.assign_adv_s = tf.placeholder(tf.float32, shape, name='assign_adv_s')
-        self.assign_target = tf.placeholder(tf.float32, (self.batch_size, self.classes), name='assign_target')
-        self.assign_const = tf.placeholder(tf.float32, [self.batch_size], name='assign_const')
-        self.assign_target_proto = tf.placeholder(tf.float32, self.shape_enc, name='assign_target_proto')
-        self.adv_cat = self.adv
-        self.adv_cat_s = self.adv_s
-
-        # # define conditions and values for element-wise shrinkage thresholding
-        # with tf.name_scope('shrinkage_thresholding') as scope:
-        #     cond = [tf.cast(tf.greater(tf.subtract(self.adv_s, self.orig), self.beta), tf.float32),
-        #             tf.cast(tf.less_equal(tf.abs(tf.subtract(self.adv_s, self.orig)), self.beta), tf.float32),
-        #             tf.cast(tf.less(tf.subtract(self.adv_s, self.orig), tf.negative(self.beta)), tf.float32)]
-        #     upper = tf.minimum(tf.subtract(self.adv_s, self.beta), tf.cast(feature_range[1], tf.float32))
-        #     lower = tf.maximum(tf.add(self.adv_s, self.beta), tf.cast(feature_range[0], tf.float32))
-        #     self.assign_adv = tf.multiply(cond[0], upper) + tf.multiply(cond[1], self.orig) + tf.multiply(cond[2],
-        #                                                                                                   lower)
-
-        # # perturbation update and vector projection on correct feature range set
-        # with tf.name_scope('perturbation_y') as scope:
-        #     self.zt = tf.divide(self.global_step, self.global_step + tf.cast(3, tf.float32))
-        #     self.assign_adv_s = self.assign_adv + tf.multiply(self.zt, self.assign_adv - self.adv)
-        #     # map to feature space
-        #     self.assign_adv_s = tf.minimum(self.assign_adv_s, tf.cast(feature_range[1], tf.float32))
-        #     self.assign_adv_s = tf.maximum(self.assign_adv_s, tf.cast(feature_range[0], tf.float32))
-
-        # # assign counterfactual of step k+1 to k
-        # with tf.name_scope('update_adv') as scope:
-        #     self.adv_updater = tf.assign(self.adv, self.assign_adv)
-        #     self.adv_updater_s = tf.assign(self.adv_s, self.assign_adv_s)
-
-        # # from perturbed instance, derive deviation delta
-        # with tf.name_scope('update_delta') as scope:
-        #     self.delta = self.orig - self.adv
-        #     self.delta_s = self.orig - self.adv_s
-
-        # # define L1 and L2 loss terms; L1+L2 is later used as an optimization constraint for FISTA
-        # ax_sum = list(np.arange(1, len(shape)))
-        # with tf.name_scope('loss_l1_l2') as scope:
-        #     self.l2 = tf.reduce_sum(tf.square(self.delta), axis=ax_sum)
-        #     self.l2_s = tf.reduce_sum(tf.square(self.delta_s), axis=ax_sum)
-        #     self.l1 = tf.reduce_sum(tf.abs(self.delta), axis=ax_sum)
-        #     self.l1_s = tf.reduce_sum(tf.abs(self.delta_s), axis=ax_sum)
-        #     self.l1_l2 = self.l2 + tf.multiply(self.l1, self.beta)
-        #     self.l1_l2_s = self.l2_s + tf.multiply(self.l1_s, self.beta)
-
-        #     # sum losses
-        #     self.loss_l1 = tf.reduce_sum(self.l1)
-        #     self.loss_l1_s = tf.reduce_sum(self.l1_s)
-        #     self.loss_l2 = tf.reduce_sum(self.l2)
-        #     self.loss_l2_s = tf.reduce_sum(self.l2_s)
-
-        # with tf.name_scope('loss_ae') as scope:
-        #     # gamma * AE loss
-        #     if self.ae_model:
-        #         # run autoencoder
-        #         self.adv_ae = self.ae(self.adv_cat)  # type: ignore[misc]
-        #         self.adv_ae_s = self.ae(self.adv_cat_s)  # type: ignore[misc]
-        #         # compute loss
-        #         self.loss_ae = self.gamma * tf.square(tf.norm(self.adv_ae - self.adv))
-        #         self.loss_ae_s = self.gamma * tf.square(tf.norm(self.adv_ae_s - self.adv_s))
-        #     else:  # no auto-encoder available
-        #         self.loss_ae = tf.constant(0.)
-        #         self.loss_ae_s = tf.constant(0.)
-
-        # with tf.name_scope('loss_attack') as scope:
-        #     if not self.model:
-        #         self.loss_attack = tf.placeholder(tf.float32)
-        #     elif self.c_init == 0. and self.c_steps == 1:  # prediction loss term not used
-        #         # make predictions on perturbed instance
-        #         self.pred_proba = self.predict(self.adv_cat)
-        #         self.pred_proba_s = self.predict(self.adv_cat_s)
-
-        #         self.loss_attack = tf.constant(0.)
-        #         self.loss_attack_s = tf.constant(0.)
-        #     else:
-        #         # make predictions on perturbed instance
-        #         self.pred_proba = self.predict(self.adv_cat)
-        #         self.pred_proba_s = self.predict(self.adv_cat_s)
-
-        #         # probability of target label prediction
-        #         self.target_proba = tf.reduce_sum(self.target * self.pred_proba, 1)
-        #         target_proba_s = tf.reduce_sum(self.target * self.pred_proba_s, 1)
-
-        #         # max probability of non target label prediction
-        #         self.nontarget_proba_max = tf.reduce_max((1 - self.target) * self.pred_proba - (self.target * 10000), 1)
-        #         nontarget_proba_max_s = tf.reduce_max((1 - self.target) * self.pred_proba_s - (self.target * 10000), 1)
-
-        #         # loss term f(x,d)
-        #         loss_attack = tf.maximum(0.0, -self.nontarget_proba_max + self.target_proba + self.kappa)
-        #         loss_attack_s = tf.maximum(0.0, -nontarget_proba_max_s + target_proba_s + self.kappa)
-
-        #         # c * f(x,d)
-        #         self.loss_attack = tf.reduce_sum(self.const * loss_attack)
-        #         self.loss_attack_s = tf.reduce_sum(self.const * loss_attack_s)
-
-        # with tf.name_scope('loss_prototype') as scope:
-        #     # CHANGE: adv is delta, so adv and target_proto are no longer the same shape
-        #     if self.enc_model:
-        #         self.loss_proto = self.theta * tf.square(
-        #             tf.norm(self.enc(self.adv_cat) - self.target_proto))  # type: ignore[misc]
-        #         self.loss_proto_s = self.theta * tf.square(
-        #             tf.norm(self.enc(self.adv_cat_s) - self.target_proto))  # type: ignore[misc]
-        #     elif self.use_kdtree:
-        #         self.loss_proto = self.theta * tf.square(tf.norm(self.adv - self.target_proto))
-        #         self.loss_proto_s = self.theta * tf.square(tf.norm(self.adv_s - self.target_proto))
-        #     else:  # no encoder available and no k-d trees used
-        #         self.loss_proto = tf.constant(0.)
-        #         self.loss_proto_s = tf.constant(0.)
-
-        # with tf.name_scope('loss_combined') as scope:
-        #     # no need for L1 term in loss to optimize when using FISTA
-        #     if self.model:
-        #         self.loss_opt = self.loss_attack_s + self.loss_l2_s + self.loss_ae_s + self.loss_proto_s
-        #     else:  # separate numerical computation of loss attack gradient
-        #         self.loss_opt = self.loss_l2_s + self.loss_ae_s + self.loss_proto_s
-
-        #     # add L1 term to overall loss; this is not the loss that will be directly optimized
-        #     self.loss_total = (self.loss_attack + self.loss_l2 + self.loss_ae +
-        #                        tf.multiply(self.beta, self.loss_l1) + self.loss_proto)
-
-        with tf.name_scope('training') as scope:
-            self.learning_rate = tf.train.polynomial_decay(learning_rate_init, self.global_step,
-                                                           self.max_iterations, 0, power=0.5)
-            optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
-            start_vars = set(x.name for x in tf.global_variables())
-
-            # first compute, then apply grads
-            self.compute_grads = optimizer.compute_gradients(self.loss_opt, var_list=[self.adv_s])
-            self.grad_ph = tf.placeholder(tf.float32, name='grad_adv_s')
-            var = [tvar for tvar in tf.trainable_variables() if tvar.name.startswith('adv_s')][-1]  # get the last in
-            # case explainer is re-initialized and a new graph is created
-            grad_and_var = [(self.grad_ph, var)]
-            self.apply_grads = optimizer.apply_gradients(grad_and_var, global_step=self.global_step)
-            end_vars = tf.global_variables()
-            new_vars = [x for x in end_vars if x.name not in start_vars]
-
-        # variables to initialize
-        self.setup = []  # type: list
-        self.setup.append(self.orig.assign(self.assign_orig))
-        self.setup.append(self.target.assign(self.assign_target))
-        self.setup.append(self.const.assign(self.assign_const))
-        self.setup.append(self.adv.assign(self.assign_adv))
-        self.setup.append(self.adv_s.assign(self.assign_adv_s))
-        self.setup.append(self.target_proto.assign(self.assign_target_proto))
-
-        self.init = tf.variables_initializer(var_list=[self.global_step] + [self.adv_s] + [self.adv] + new_vars)
 
     def compute_shrinkage_thresholding(self, feature_range):
         # Conditions for element-wise shrinkage thresholding
@@ -350,17 +173,17 @@ class CounterfactualProto(Explainer, FitMixin):
         self.assign_adv = cond_0.float() * upper + cond_1.float() * self.orig + cond_2.float() * lower
 
     def compute_perturbation_projection(self):
-        # Perturbation update and vector projection on correct feature range set
+        # perturbation update (momentum term)
         self.zt = self.global_step / (self.global_step + 3.0)
         self.assign_adv_s = self.assign_adv + self.zt * (self.assign_adv - self.adv)
         
-        # Map to feature space
-        self.assign_adv_s = torch.clamp(self.assign_adv_s, feature_range[0], feature_range[1])
+        # vector projection on correct feature range set
+        self.assign_adv_s = torch.clamp(self.assign_adv_s, self.feature_range[0], self.feature_range[1])
     
     def update_counterfactuals(self):
-        # Update counterfactuals
+        # Update counterfactuals of step k+1 to k
         self.adv = self.assign_adv.clone()
-        self.adv_s = self.assign_adv_s.clone()
+        self.adv_s.data = self.assign_adv_s.data.clone()
 
     def compute_deviations(self):
         # Derive deviations
@@ -369,6 +192,8 @@ class CounterfactualProto(Explainer, FitMixin):
 
     def compute_l1_l2_losses(self, shape):
         # Compute L1 and L2 losses
+        self.compute_deviations()
+
         ax_sum = tuple(range(1, len(shape)))
         
         self.l2 = torch.sum(self.delta**2, dim=ax_sum)
@@ -390,8 +215,8 @@ class CounterfactualProto(Explainer, FitMixin):
         # Autoencoder loss
         if self.ae_model:
             # Run autoencoder
-            self.adv_ae = self.ae(self.adv_cat)
-            self.adv_ae_s = self.ae(self.adv_cat_s)
+            self.adv_ae = self.ae(self.adv)
+            self.adv_ae_s = self.ae(self.adv_s)
             # Compute loss
             self.loss_ae = self.gamma * torch.norm(self.adv_ae - self.adv)**2
             self.loss_ae_s = self.gamma * torch.norm(self.adv_ae_s - self.adv_s)**2
@@ -401,14 +226,14 @@ class CounterfactualProto(Explainer, FitMixin):
 
     def compute_attack_loss(self):
         if self.c_init == 0. and self.c_steps == 1:  # Prediction loss term not used
-            self.pred_proba = self.predict(self.adv_cat)
-            self.pred_proba_s = self.predict(self.adv_cat_s)
+            self.pred_proba = self.predict(self.adv)
+            self.pred_proba_s = self.predict(self.adv_s)
             
             self.loss_attack = torch.tensor(0.)
             self.loss_attack_s = torch.tensor(0.)
         else:
-            self.pred_proba = self.predict(self.adv_cat)
-            self.pred_proba_s = self.predict(self.adv_cat_s)
+            self.pred_proba = self.predict(self.adv)
+            self.pred_proba_s = self.predict(self.adv_s)
 
             # Probability of target label prediction
             self.target_proba = torch.sum(self.target * self.pred_proba, dim=1)
@@ -429,8 +254,8 @@ class CounterfactualProto(Explainer, FitMixin):
     def compute_prototype_loss(self):
         """Compute the prototype loss."""
         if self.enc_model:
-            self.loss_proto = self.theta * torch.norm(self.enc(self.adv_cat) - self.target_proto)**2
-            self.loss_proto_s = self.theta * torch.norm(self.enc(self.adv_cat_s) - self.target_proto)**2
+            self.loss_proto = self.theta * torch.norm(self.enc(self.adv) - self.target_proto)**2
+            self.loss_proto_s = self.theta * torch.norm(self.enc(self.adv_s) - self.target_proto)**2
         elif self.use_kdtree:
             self.loss_proto = self.theta * torch.norm(self.adv - self.target_proto)**2
             self.loss_proto_s = self.theta * torch.norm(self.adv_s - self.target_proto)**2
@@ -439,6 +264,13 @@ class CounterfactualProto(Explainer, FitMixin):
             self.loss_proto_s = torch.tensor(0.)
 
     def compute_combined_loss(self):
+
+        # Computer each loss term
+        self.compute_attack_loss()
+        self.compute_l1_l2_losses(self.shape)
+        self.compute_autoencoder_loss()
+        self.compute_prototype_loss()
+
         """Compute the combined loss."""
         self.loss_opt = self.loss_attack_s + self.loss_l2_s + self.loss_ae_s + self.loss_proto_s
         # add L1 term to overall loss; this is not the loss that will be directly optimized
@@ -447,11 +279,10 @@ class CounterfactualProto(Explainer, FitMixin):
 
     def setup_training(self, learning_rate_init):
         """Set up the training parameters."""
-        optimizer = optim.SGD([self.adv_s], lr=learning_rate_init)
+        self.optimizer = optim.SGD([self.adv_s], lr=learning_rate_init)
         lambda_poly_decay = lambda epoch: learning_rate_init * (1 - epoch / self.max_iterations)**0.5
-        self.learning_rate = optim.lr_scheduler.LambdaLR(optimizer=optimizer, lr_lambda=lambda_poly_decay)
+        self.learning_rate = optim.lr_scheduler.LambdaLR(optimizer=self.optimizer, lr_lambda=lambda_poly_decay)
 
-    
     def fit(self,
             train_data: np.ndarray = np.array([]),
             preds:np.ndarray = np.array([]),
@@ -484,7 +315,7 @@ class CounterfactualProto(Explainer, FitMixin):
                 self.class_proto[i] = np.expand_dims(np.mean(enc_data[idx], axis=0), axis=0)
                 self.class_enc[i] = enc_data[idx]
         elif self.use_kdtree:
-            logger.warning('No encoder specified. Using k-d trees to represent class prototypes.')
+            warnings.warn('No encoder specified. Using k-d trees to represent class prototypes.')
             if not os.path.exists(self.trustscore):
                 print('no trustscore file used, building KDtree...')
                 if trustscore_kwargs is not None:
@@ -497,94 +328,15 @@ class CounterfactualProto(Explainer, FitMixin):
                 self.kdtrees = ts.kdtrees
                 self.X_by_class = ts.X_kdtree
                 save_object(ts, self.trustscore)
-                print('Trustscore object saved as pickle file')
+                print('trustscore file saved')
             else:
+                print('trustscore file already saved, loading KDtree...')
+                print(self.trustscore)
                 ts = load_object(self.trustscore)
                 self.kdtrees = ts.kdtrees
                 self.X_by_class = ts.X_kdtree
+                print('trustscore file loaded')
         return self
-
-    def loss_fn(self, pred_proba: np.ndarray, Y: np.ndarray) -> np.ndarray:
-        """
-        Compute the attack loss.
-
-        Parameters
-        ----------
-        pred_proba
-            Prediction probabilities of an instance.
-        Y
-            One-hot representation of instance labels.
-
-        Returns
-        -------
-        Loss of the attack.
-        """
-        # probability of target label prediction
-        target_proba = np.sum(pred_proba * Y)
-        # max probability of non target label prediction
-        nontarget_proba_max = np.max((1 - Y) * pred_proba - 10000 * Y)
-        # loss term f(x,d)
-        loss = np.maximum(0., - nontarget_proba_max + target_proba + self.kappa)
-        # c * f(x,d)
-        loss_attack = np.sum(self.const.eval(session=self.sess) * loss)
-        return loss_attack
-
-    def get_gradients(self, X: np.ndarray, Y: np.ndarray, grads_shape: tuple) -> np.ndarray:
-        """
-        Compute numerical gradients of the attack loss term:
-        `dL/dx = (dL/dP)*(dP/dx)` with `L = loss_attack_s; P = predict; x = adv_s`.
-
-        Parameters
-        ----------
-        X
-            Instance around which gradient is evaluated.
-        Y
-            One-hot representation of instance labels.
-        grads_shape
-            Shape of gradients.
-
-        Returns
-        -------
-        Array with gradients.
-        """
-        X_pred = X
-        # N = gradient batch size; F = nb of features; P = nb of prediction classes; B = instance batch size
-        # dL/dP -> BxP
-        preds = self.predict(X_pred)  # NxP
-        preds_pert_pos, preds_pert_neg = perturb(preds, self.eps[0], proba=True)  # (N*P)xP
-
-        def f(preds_pert):
-            return np.sum(Y * preds_pert, axis=1)
-
-        def g(preds_pert):
-            return np.max((1 - Y) * preds_pert, axis=1)
-
-        # find instances where the gradient is 0
-        idx_nograd = np.where(f(preds) - g(preds) <= - self.kappa)[0]
-        if len(idx_nograd) == X.shape[0]:
-            return np.zeros((1,*X.shape[1:]))
-        dl_df = f(preds_pert_pos) - f(preds_pert_neg)  # N*P
-        dl_dg = g(preds_pert_pos) - g(preds_pert_neg)  # N*P
-        dl_dp = dl_df - dl_dg  # N*P
-        dl_dp = np.reshape(dl_dp, (X.shape[0], -1)) / (2 * self.eps[0])  # NxP
-
-        # dP/dx -> PxF
-        X_pert_pos, X_pert_neg = perturb(X, self.eps[1], proba=False)  # (N*F)x(shape of X[0])
-        X_pert = np.concatenate([X_pert_pos, X_pert_neg], axis=0)
-        preds_concat = self.predict(X_pert)
-        n_pert = X_pert_pos.shape[0]
-        dp_dx = preds_concat[:n_pert] - preds_concat[n_pert:]  # (N*F)*P
-        dp_dx = np.reshape(np.reshape(dp_dx, (X.shape[0], -1)),
-                           (X.shape[0], preds.shape[1], -1), order='F') / (2 * self.eps[1])  # NxPxF
-
-        # dL/dx -> Bx(shape of X[0])
-        grads = np.einsum('ij,ijk->ik', dl_dp, dp_dx)  # NxF
-        # set instances where gradient is 0 to 0
-        if len(idx_nograd) > 0:
-            grads[idx_nograd] = np.zeros(grads.shape[1:])
-        grads = np.mean(grads, axis=0)  # B*F
-        grads = np.reshape(grads, (self.batch_size,) + grads_shape)  # B*(shape of X[0])
-        return grads
 
     def score(self, X: np.ndarray, adv_class: int, orig_class: int, eps: float = 1e-10) -> float:
         """
@@ -616,7 +368,7 @@ class CounterfactualProto(Explainer, FitMixin):
             dist_adv = self.kdtrees[adv_class].query(Xpatch, k=1)[0]
             dist_orig = self.kdtrees[orig_class].query(Xpatch, k=1)[0]
         else:
-            logger.warning('Need either an encoder or the k-d trees enabled to compute distance scores.')
+            warnings.warn('Need either an encoder or the k-d trees enabled to compute distance scores.')
         return dist_orig / (dist_adv + eps)  # type: ignore[return-value]
 
     def attack(self, 
@@ -627,8 +379,7 @@ class CounterfactualProto(Explainer, FitMixin):
                k_type: str = 'mean', 
                threshold: float = 0., 
                verbose: bool = False, 
-               print_every: int = 100,
-               log_every: int = 100) -> Tuple[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
+               print_every: int = 100) -> Tuple[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
         """
         Find a counterfactual (CF) for instance `X` using a fast iterative shrinkage-thresholding algorithm (FISTA).
 
@@ -683,17 +434,17 @@ class CounterfactualProto(Explainer, FitMixin):
             -------
             Bool whether counterfactual conditions hold.
             """
-            if not isinstance(x, (float, int, np.int64)):
-                x = np.copy(x)
+            if (not isinstance(x, (float, int, np.int64))) and (not is_single_float_or_int_tensor(x)):
+                x = x.clone()
                 x[y] += self.kappa  # type: ignore
-                x = np.argmax(x)  # type: ignore
+                x = torch.argmax(x)  # type: ignore
             return x != y
 
         # define target classes for prototype if not specified yet
         if target_class is None:
             target_class = list(range(self.classes))
             target_class.remove(np.argmax(Y, axis=1))
-            if verbose:
+            if self.verbose:
                 print('Predicted class: {}'.format(np.argmax(Y, axis=1)))
                 print('Target classes: {}'.format(target_class))
         X_num = X
@@ -733,131 +484,106 @@ class CounterfactualProto(Explainer, FitMixin):
         if self.enc_or_kdtree:
             self.id_proto = min(dist_proto, key=dist_proto.get)  # type: ignore[arg-type]
             proto_val = self.class_proto[self.id_proto]
-            if verbose:
+            if self.verbose:
                 print('Prototype class: {}'.format(self.id_proto))
         else:  # no prototype loss term used
             proto_val = np.zeros(self.shape_enc)
-
-        # set shape for perturbed instance and gradients
-        pert_shape = self.shape
+        proto_val = torch.tensor(proto_val, dtype=torch.float32)
 
         # set the lower and upper bounds for the constant 'c' to scale the attack loss term
         # these bounds are updated for each c_step iteration
-        const_lb = np.zeros(self.batch_size)
-        const = np.ones(self.batch_size) * self.c_init
-        const_ub = np.ones(self.batch_size) * 1e10
+        const_lb = torch.zeros(self.batch_size)
+        const = torch.ones(self.batch_size) * self.c_init
+        const_ub = torch.ones(self.batch_size) * 1e10
 
         # init values for the best attack instances for each instance in the batch
         overall_best_dist = [1e10] * self.batch_size
-        overall_best_attack = [np.zeros(self.shape[1:])] * self.batch_size
-        overall_best_grad = (np.zeros(self.shape), np.zeros(self.shape))
+        overall_best_attack = [torch.zeros(self.shape[1:])] * self.batch_size
+        overall_best_grad = (torch.zeros(self.shape), torch.zeros(self.shape))
 
         # keep track of counterfactual evolution
         self.cf_global = {i: [] for i in range(self.c_steps)}  # type: dict
 
-        # Assign values directly in PyTorch
-        self.orig = torch.tensor(X_num, requires_grad=True)
-        self.target = torch.tensor(Y)
-        self.const = torch.tensor(const)
-        self.adv = torch.tensor(X_num)
-        self.adv_s = torch.tensor(X_num)
-        self.target_proto = torch.tensor(proto_val)
-
-        # Initialize lists for storing intermediate results
-        X_der_batch, X_der_batch_s = [], []
-
         # iterate over nb of updates for 'c'
         for _ in range(self.c_steps):
+
+            # init variables
+            self.orig = X_num.clone().detach()
+            self.target = Y.clone().detach()
+            self.const = const.clone().detach()
+            self.adv = X_num.clone().detach()
+            self.adv_s = X_num.clone().detach().requires_grad_()
+            self.target_proto = proto_val.clone().detach()
+
+            # init optimizer
+            self.setup_training(self.learning_rate_init)
 
             # reset current best distances and scores
             current_best_dist = [1e10] * self.batch_size
             current_best_proba = [-1] * self.batch_size
-
-            X_der_batch, X_der_batch_s = [], []  # type: Any, Any
-
+            self.global_step = 0
+        
             for i in range(self.max_iterations):
-                
                 # Zero out the gradients before computation at every step
                 self.optimizer.zero_grad()
 
-                # Compute the loss
-                loss = self.compute_combined_loss() # Assuming you have a function that computes the total loss
-                loss.backward() # Compute gradients using PyTorch's autograd
+                # Compute the forward loss
+                self.compute_combined_loss()
+
+                # Compute gradients in backward pass
+                self.loss_opt.backward()
 
                 # Clip the gradients
-                torch.nn.utils.clip_grad_value_(self.adv_s, (self.clip[0], self.clip[1]))
+                with torch.no_grad():
+                    self.adv_s.grad.clamp_(self.clip[0], self.clip[1])
+                gradients = self.adv_s.grad
 
                 # Apply the gradients
                 self.optimizer.step()
 
-                # Update adv and adv_s (In PyTorch, if using an optimizer, it's already updated. 
-                # If not, you can update manually)
-                self.delta = self.orig - self.adv
-                self.delta_s = self.orig - self.adv_s
+                # Update the learning rate
+                self.learning_rate.step()
 
-                # Compute prediction probabilities on perturbed instances
-                pred_proba = self.predict(self.adv) # Assuming predict function works with PyTorch tensors
-
-                # Compute attack, total and L1+L2 losses (you might have to adjust based on your exact loss functions)
-                loss_attack = self.loss_fn(pred_proba, self.target)
-                loss_tot = self.loss_total() # Assuming a function that computes this
-                loss_l1_l2 = self.l1_l2() # Assuming a function that computes this
-                    
-                # # compute and clip gradients defined in graph
-                # grads_vars_graph = self.sess.run(self.compute_grads)
-                # grads_graph = [g for g, _ in grads_vars_graph][0]
-                # grads_graph = np.clip(grads_graph, self.clip[0], self.clip[1])
-
-                # # apply gradients
-                # grads = grads_graph
-                # self.sess.run(self.apply_grads, feed_dict={self.grad_ph: grads})
-
-                # update adv and adv_s with perturbed instances
-                self.sess.run([self.adv_updater, self.adv_updater_s, self.delta, self.delta_s])
+                # update adv and adv_s
+                with torch.no_grad():
+                    self.compute_shrinkage_thresholding(self.feature_range)
+                    self.compute_perturbation_projection() 
+                    self.update_counterfactuals()
 
                 # compute overall and attack loss, L1+L2 loss, prediction probabilities
                 # on perturbed instances and new adv
                 # L1+L2 and prediction probabilities used to see if adv is better than the current best adv under FISTA
-                X_der = self.adv.eval(session=self.sess)  # get updated perturbed instances
-                pred_proba = self.predict(X_der)
+                self.compute_combined_loss() 
 
-                # compute attack, total and L1+L2 losses as well as new perturbed instance
-                loss_attack = self.loss_fn(pred_proba, Y)
-                feed_dict = {self.loss_attack: loss_attack}
-                loss_tot, loss_l1_l2, adv = self.sess.run([self.loss_total, self.l1_l2, self.adv],
-                                                            feed_dict=feed_dict)
+                if i % print_every == 0:
+                    target_proba = torch.sum(self.pred_proba * Y)
+                    nontarget_proba_max = torch.max((1 - Y) * self.pred_proba)
 
-                if i % log_every == 0 or i % print_every == 0:
-                    loss_l2, loss_l1, loss_ae, loss_proto = \
-                        self.sess.run([self.loss_l2, self.loss_l1, self.loss_ae, self.loss_proto])
-                    target_proba = np.sum(pred_proba * Y)
-                    nontarget_proba_max = np.max((1 - Y) * pred_proba)
-                    loss_opt = loss_l1_l2 + loss_attack + loss_ae + loss_proto
-
-                if verbose and i % print_every == 0:
+                if self.verbose and i % print_every == 0:
                     print('\nIteration: {}; Const: {}'.format(i, const[0]))
-                    print('Loss total: {:.3f}, loss attack: {:.3f}'.format(loss_tot, loss_attack))
-                    print('L2: {:.3f}, L1: {:.3f}, loss AE: {:.3f}'.format(loss_l2, loss_l1, loss_ae))
-                    print('Loss proto: {:.3f}'.format(loss_proto))
+                    print('Loss total: {:.3f}, loss attack: {:.3f}'.format(self.loss_total, self.loss_attack))
+                    print('L2: {:.3f}, L1: {:.3f}, loss AE: {:.3f}'.format(self.loss_l2, self.loss_l1, self.loss_ae))
+                    print('Loss proto: {:.3f}'.format(self.loss_proto))
                     print('Target proba: {:.2f}, max non target proba: {:.2f}'.format(target_proba,
                                                                                       nontarget_proba_max))
-                    print('Gradient graph min/max: {:.3f}/{:.3f}'.format(grads_graph.min(), grads_graph.max()))
-                    print('Gradient graph mean/abs mean: {:.3f}/{:.3f}'
-                          .format(np.mean(grads_graph), np.mean(np.abs(grads_graph))))  # type: ignore
-                    if not self.model:
-                        print('Gradient numerical attack min/max: {:.3f}/{:.3f}'
-                              .format(grads_num.min(), grads_num.max()))  # type: ignore
-                        print('Gradient numerical mean/abs mean: {:.3f}/{:.3f}'
-                              .format(np.mean(grads_num), np.mean(np.abs(grads_num))))  # type: ignore
+                    # Ensure gradients are not None
+                    if gradients is not None:
+                        # Convert gradients to a numpy array for printing if necessary
+                        gradients_np = gradients.detach().cpu().numpy() # type: ignore
+                        print('Gradient min/max: {:.3f}/{:.3f}'.format(gradients_np.min(), gradients_np.max()))
+                        print('Gradient mean/abs mean: {:.3f}/{:.3f}'.format(gradients_np.mean(), np.mean(np.abs(gradients_np)))) # type: ignore
+                    else:
+                        print('Gradient min/max: None')
+                        print('Gradient mean/abs mean: None')
                     sys.stdout.flush()
 
                 # update best perturbation (distance) and class probabilities
                 # if beta * L1 + L2 < current best and predicted label is different from the initial label:
                 # update best current step or global perturbations
-                for batch_idx, (dist, proba, adv_idx) in enumerate(zip(loss_l1_l2, pred_proba, adv)):
-                    Y_class = np.argmax(Y[batch_idx])
-                    adv_class = np.argmax(proba)
-                    adv_idx = np.expand_dims(adv_idx, axis=0)
+                for batch_idx, (dist, proba, adv_idx) in enumerate(zip(self.l1_l2, self.pred_proba, self.adv)):
+                    Y_class = torch.argmax(Y[batch_idx])
+                    adv_class = torch.argmax(proba)
+                    adv_idx = adv_idx.unsqueeze(0)
 
                     # calculate trust score
                     if threshold > 0.:
@@ -871,17 +597,21 @@ class CounterfactualProto(Explainer, FitMixin):
                             and above_threshold and adv_class in target_class):
                         current_best_dist[batch_idx] = dist
                         current_best_proba[batch_idx] = adv_class  # type: ignore
+                        print(adv_class)
 
                     # global
                     if (dist < overall_best_dist[batch_idx] and compare(proba, Y_class)  # type: ignore
                             and above_threshold and adv_class in target_class):
-                        if verbose:
+                        if self.verbose:
                             print('\nNew best counterfactual found!')
                         overall_best_dist[batch_idx] = dist
                         overall_best_attack[batch_idx] = adv_idx
-                        overall_best_grad = (grads_graph, grads_num)
+                        overall_best_grad = gradients
                         self.best_attack = True
                         self.cf_global[_].append(adv_idx)
+                
+                # Increment the global step
+                self.global_step += 1
 
             # adjust the 'c' constant for the first loss term
             for batch_idx in range(self.batch_size):
@@ -916,9 +646,7 @@ class CounterfactualProto(Explainer, FitMixin):
                 k: Optional[int] = None,
                 k_type: str = 'mean',
                 threshold: float = 0.,
-                verbose: bool = False,
-                print_every: int = 100,
-                log_every: int = 100) -> Explanation:
+                print_every: int = 100) -> Explanation:
         """
         Explain instance and return counterfactual with metadata.
 
@@ -955,42 +683,36 @@ class CounterfactualProto(Explainer, FitMixin):
         explanation
             `Explanation` object containing the counterfactual with additional metadata as attributes.
         """
-        # get params for storage in meta
-        params = locals()
-        remove = ['self', 'X', 'Y']
-        for key in remove:
-            params.pop(key)
-
         if X.shape[0] != 1:
-            logger.warning('Currently only single instance explanations supported (first dim = 1), '
+            warnings.warn('Currently only single instance explanations supported (first dim = 1), '
                            'but first dim = %s', X.shape[0])
 
         # output explanation dictionary
-        data = copy.deepcopy(DEFAULT_DATA_CFP)
+        data = copy.deepcopy(DEFAULT_DATA)
 
+        # add original prediction to explanation
+        Y_proba = self.predict(X)
         if Y is None:
-            Y_proba = self.predict(X)
             Y_ohe = np.zeros(Y_proba.shape)
             Y_class = np.argmax(Y_proba, axis=1)
             Y_ohe[np.arange(Y_proba.shape[0]), Y_class] = 1
-            Y = Y_ohe.copy()
-            data['orig_proba'] = Y_proba
-        else:  # provided one-hot-encoding of prediction on X
-            data['orig_proba'] = None
-        data['orig_class'] = np.argmax(Y, axis=1)[0]
+            Y = Y_ohe.clone()
+        data['orig_proba'] = Y_proba
+        data['orig_class'] = torch.argmax(Y_proba, dim=1)[0]
 
         # find best counterfactual
-        self.best_attack = False
+        self.best_attack = False # flag to indicate whether a CF was found
         best_attack, grads = self.attack(X, Y=Y, target_class=target_class, k=k, k_type=k_type,
-                                         verbose=verbose, threshold=threshold,
-                                         print_every=print_every, log_every=log_every)
+                                         verbose=self.verbose, threshold=threshold,
+                                         print_every=print_every)
 
+        # add id of prototype to explanation dict
         if self.enc_or_kdtree:
             data['id_proto'] = self.id_proto
 
         # add to explanation dict
         if not self.best_attack:
-            logger.warning('No counterfactual found!')
+            warnings.warn('No counterfactual found!')
 
             # create explanation object
             explanation = Explanation(meta=copy.deepcopy(self.meta), data=data)
@@ -999,10 +721,10 @@ class CounterfactualProto(Explainer, FitMixin):
         data['all'] = self.cf_global
         data['cf'] = {}
         data['cf']['X'] = best_attack
-        Y_pert = self.predict(best_attack)
-        data['cf']['class'] = np.argmax(Y_pert, axis=1)[0]
+        Y_pert = self.predict(torch.from_numpy(best_attack)).detach().numpy()
         data['cf']['proba'] = Y_pert
-        data['cf']['grads_graph'], data['cf']['grads_num'] = grads[0], grads[1]
+        data['cf']['class'] = np.argmax(Y_pert, axis=1)[0]
+        data['cf']['grads'] = grads.detach().numpy()
 
         # create explanation object
         explanation = Explanation(meta=copy.deepcopy(self.meta), data=data)
@@ -1016,3 +738,15 @@ def save_object(obj, filename):
 def load_object(filename):
     with open(filename, 'rb') as outp: 
         return pickle.load(outp)
+    
+def is_single_float_or_int_tensor(x):
+    # Check if x is a tensor and has only one element
+    if isinstance(x, torch.Tensor) and x.numel() == 1:
+        # Check for integer types (can include more types if needed)
+        if x.dtype in [torch.int32, torch.int64, torch.int16, torch.int8]:
+            return True
+        # Check for float types (can include more types if needed)
+        elif x.dtype in [torch.float32, torch.float64, torch.float16]:
+            return True
+        # Add more conditions if you want to check for other specific types
+    return False

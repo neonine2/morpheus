@@ -7,10 +7,10 @@ from typing import Any, Callable, Optional, Tuple, Union
 import numpy as np
 import tensorflow.compat.v1 as tf
 
-from morpheus.api.defaults import DEFAULT_DATA_CFP, DEFAULT_META_CFP
-from morpheus.api.interfaces import Explainer, Explanation, FitMixin
-from morpheus.confidence import TrustScore
-from morpheus.utils.gradients import perturb
+from api.defaults import DEFAULT_DATA, DEFAULT_META
+from api.interfaces import Explainer, Explanation, FitMixin
+from confidence import TrustScore
+from utils.gradients import perturb
 
 logger = logging.getLogger(__name__)
 tf.logging.set_verbosity(tf.logging.ERROR)
@@ -38,7 +38,8 @@ class CounterfactualProto(Explainer, FitMixin):
                  update_num_grad: int = 1,
                  trustscore: Optional[str] = None,
                  write_dir: Optional[str] = None,
-                 sess: Optional[tf.Session] = None) -> None:
+                 sess: Optional[tf.Session] = None,
+                 verbose: bool = False) -> None:
         """
         Initialize prototypical counterfactual method.
 
@@ -90,7 +91,7 @@ class CounterfactualProto(Explainer, FitMixin):
         sess
             Optional `tensorflow` session that will be used if passed instead of creating or inferring one internally.
         """
-        super().__init__(meta=copy.deepcopy(DEFAULT_META_CFP))
+        super().__init__(meta=copy.deepcopy(DEFAULT_META))
 
         # if image as input
         if len(shape) > 2:
@@ -342,9 +343,6 @@ class CounterfactualProto(Explainer, FitMixin):
         self.setup.append(self.adv.assign(self.assign_adv))
         self.setup.append(self.adv_s.assign(self.assign_adv_s))
         self.setup.append(self.target_proto.assign(self.assign_target_proto))
-        # self.setup.append(self.patch.assign(self.assign_patch))
-        # if self.is_cat:
-        #     self.setup.append(self.map_var.assign(self.assign_map))
 
         self.init = tf.variables_initializer(var_list=[self.global_step] + [self.adv_s] + [self.adv] + new_vars)
 
@@ -728,7 +726,12 @@ class CounterfactualProto(Explainer, FitMixin):
                     feed_dict = {self.loss_attack: loss_attack}
                     loss_tot, loss_l1_l2, adv = self.sess.run([self.loss_total, self.l1_l2, self.adv],
                                                               feed_dict=feed_dict)
-
+                loss_l2, loss_l1, loss_ae, loss_proto = \
+                        self.sess.run([self.loss_l2, self.loss_l1, self.loss_ae, self.loss_proto])
+                target_proba = np.sum(pred_proba * Y)
+                nontarget_proba_max = np.max((1 - Y) * pred_proba)
+                loss_opt = loss_l1_l2 + loss_attack + loss_ae + loss_proto
+                print(loss_opt)
                 if i % log_every == 0 or i % print_every == 0:
                     loss_l2, loss_l1, loss_ae, loss_proto = \
                         self.sess.run([self.loss_l2, self.loss_l1, self.loss_ae, self.loss_proto])
@@ -887,7 +890,7 @@ class CounterfactualProto(Explainer, FitMixin):
                            'but first dim = %s', X.shape[0])
 
         # output explanation dictionary
-        data = copy.deepcopy(DEFAULT_DATA_CFP)
+        data = copy.deepcopy(DEFAULT_DATA)
 
         if Y is None:
             if self.model:

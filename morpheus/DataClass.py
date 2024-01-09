@@ -4,8 +4,8 @@ import os
 import json
 import warnings
 import seaborn as sns
-from morpheus.morpheus.utils.models import TissueClassifier
-from morpheus.utils.imcwrangler import patch_to_matrix
+from utils.models import TissueClassifier
+from utils.imcwrangler import patch_to_matrix
 import torch
 
 from statsmodels.stats import multitest
@@ -84,7 +84,7 @@ class IMCDataset:
         except IOError:
             print(f'{_path} not found.')
 
-    def get_data_split(self, split='train'):
+    def get_data_split(self, split):
         X = np.load(f'{self.data_dir}/{split}/img.npy')
         label = pd.read_csv(self.data_dir+f'/{split}/label.csv')
         return X, label
@@ -296,18 +296,34 @@ class IMCDataset:
         e_x = np.exp(x - np.max(x, axis=axis, keepdims=True))  # for numerical stability
         return e_x / e_x.sum(axis=axis, keepdims=True)
 
-    def compute_prediction(self, threshold=None, split='test'):
+    def compute_prediction(self, threshold=None, split=['test']):
         if threshold is None:
             threshold = self.threshold
-        X, label = self.get_data_split(split)
-        
+
+        # Initialize X as an empty array and label as an empty DataFrame
+        X = np.empty((0, 0))  # Initialize with zero columns, it will adjust as data is appended
+        label = pd.DataFrame()
+
+        for dataset in split:
+            new_X, new_label = self.get_data_split(dataset)
+
+            # If X is empty, initialize it with the first set of data
+            if X.shape[1] == 0:
+                X = new_X
+            else:
+                # Concatenate new data to X
+                X = np.vstack([X, new_X])
+
+            # Concatenate new labels to the label DataFrame
+            label = pd.concat([label, pd.DataFrame(new_label)], ignore_index=True)
         img_num = label[['ImageNumber']].values.flatten()
         y_test = label[['Tcytotoxic']].values.flatten()
 
         # predict patch label
         X = (X-self.mu)/self.stdev
+        Xmean = np.mean(X, axis=(1,2))
         if self.modelArch != 'unet':
-            X = np.mean(X, axis=(1,2))
+            X = Xmean
         pred = self.classifier(X)
         if pred.shape[1] == 1:
             new_col = 1 - pred[:, 0]
@@ -315,6 +331,10 @@ class IMCDataset:
         pred = pred[:,1]
 
         # map each patch to patient
+        patch_by_gene = pd.DataFrame(Xmean, columns=self.channel)
+        tumor_patch = pd.concat([patch_by_gene, pd.Series(y_test, name='Data'), 
+                                 pd.Series(pred.flatten(), name='Model')], axis=1)
+
         pre_post_df = pd.DataFrame({'ImageNumber': img_num.flatten(), 
                                     'orig': y_test.flatten() == 1, 
                                     'predict': pred.flatten() > threshold})
@@ -326,7 +346,7 @@ class IMCDataset:
 
         rmse = np.sqrt(mean_squared_error(self.img_mean['orig'], self.img_mean['predict']))
         print('Root Mean Squared Error:', rmse)
-        return pred, X
+        return pred, X, tumor_patch
 
     def regression_plus_T_Test(self):
         x = self.img_mean['orig'].to_numpy()

@@ -12,7 +12,6 @@ import torch.optim as optim
 from api.defaults import DEFAULT_DATA, DEFAULT_META
 from api.interfaces import Explainer, Explanation, FitMixin
 from confidence import TrustScore
-from utils.gradients import perturb
 
 # logger = logging.getLogger(__name__)
 # tf.logging.set_verbosity(tf.logging.ERROR)

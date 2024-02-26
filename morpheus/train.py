@@ -1,12 +1,10 @@
 import os
-
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint,TQDMProgressBar
 import pytorch_lightning as pl
 
 from utils.data_prep import generate_split_from_data
 from utils.dataset import make_torch_dataloader, set_seed
 from utils.models import TissueClassifier
-# from utils.plotting_fun import *
 
 # Function for setting the seed
 set_seed(42)
@@ -30,10 +28,6 @@ print(model_path)
 # model
 model = TissueClassifier(in_channels, img_size, modelArch=modelArch)
 
-# Change the learning rate of the optimizer
-# model.configure_optimizers().param_groups[0]['lr'] = 0.001
-
-# training
 trainer = pl.Trainer(accelerator='gpu', 
                      devices=1, 
                      precision=16,
@@ -44,8 +38,11 @@ trainer = pl.Trainer(accelerator='gpu',
                          TQDMProgressBar(refresh_rate=10)
                          ], 
                      default_root_dir=model_path)
-
+# training
 trainer.fit(model, train_loader, val_loader)
+
+# disable randomness, dropout, etc...
+model.eval()
 
 # testing
 trainer.test(dataloaders=test_loader)

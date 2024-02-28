@@ -1,6 +1,13 @@
 import numpy as np
 import pandas as pd
 
+def verify_input_data(df, required_columns):
+    if not set(required_columns).issubset(df.columns):
+        raise ValueError(
+            f"Dataframe does not contain all required columns: {required_columns}"
+        )
+    return True
+
 def image_to_patch(df, 
                    patch_dim, 
                    width=None, 

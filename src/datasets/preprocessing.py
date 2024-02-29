@@ -1,17 +1,15 @@
-import numpy as np
 import os
-import pickle
-import random
-import pandas as pd
-
-
 import sys
+import pickle
+import numpy as np
+import pandas as pd
+from tqdm import tqdm
+import torch
+
 
 sys.path.append("/home/zwang2/morpheus/src/")
 from constants import celltype, splits, colname
-from utils.misc import unison_shuffled_copies, check_split_constraints
 from pprint import pprint
-
 
 def get_stratified_splits(
     img_dir: str,
@@ -33,7 +31,7 @@ def get_stratified_splits(
 
     # generate data split if not already done or overwrite set to True
     if not os.path.isdir(os.path.join(save_path, splits.train.value)) or overwrite:
-        print(f"Generating data splits and saving to {save_path}")
+        print(f"Generating data splits and saving to {save_path} ...")
         stratified_data_split(
             img_dir,
             patient_dir,
@@ -49,16 +47,13 @@ def get_stratified_splits(
 
 def describe_data_split(save_path, celltype=celltype.cd8.value):
     y_mean = {}
-    pat = np.load(save_path + "/split_info.pkl", allow_pickle=True)["patient_df"]
-    print(pat)
-    for group in [splits.train.value, splits.validate.value, splits.test.value]:
-        data = pd.read_csv(os.path.join(save_path, f"{group}/label.csv"))
+    split_info = np.load(save_path + "/split_info.pkl", allow_pickle=True)
+    for split in [splits.train.value, splits.validate.value, splits.test.value]:
+        data = pd.read_csv(os.path.join(save_path, f"{split}/label.csv"))
         print(data)
-        n_pat = len(
-            np.unique(pat[pat[colname.IMAGEID.value].isin(data[colname.IMAGEID.value])][colname.PATIENTID.value])
-        )
+        n_pat = len(split_info[split + "_patient"])
         y = data[celltype].mean()
-        y_mean.update({group: [round(y, 3), len(data), n_pat]})
+        y_mean.update({split: [round(y, 3), len(data), n_pat]})
     return y_mean
 
 
@@ -73,7 +68,7 @@ def stratified_data_split(
     train_lb=0.65,
     ntol=100,
 ):
-    predefinedSplit = True if len(patient_split) != 0 else False
+    predefinedSplit = bool(patient_split)
     if save_path is None:
         save_path = os.path.dirname(img_dir)
 
@@ -81,55 +76,51 @@ def stratified_data_split(
     train_ratio, valid_ratio, test_ratio = split_ratio
 
     # load patient and image id
-    pat_df = pd.read_csv(patient_path)
-    pat_df = pat_df[[colname.PATIENTID.value, colname.IMAGEID.value]]
-    pat_id = np.unique(pat_df[colname.PATIENTID.value].tolist())
+    pat_df = pd.read_csv(patient_path)[[colname.PATIENTID.value, colname.IMAGEID.value]]
+    unique_pat_id = np.unique(pat_df[colname.PATIENTID.value])
 
     # load image data
-    print("loading image data")
     try:
         with open(img_dir, "rb") as f:
             intensity, label, channel, _ = pickle.load(f)
     except Exception as e:
         print(f"Error loading image data: {e}")
         return
-    npatches = intensity.shape[0]
-
+    
     # split patient into train-test-validation group stratified by T cell level
-    counter = 0
+    npatches = intensity.shape[0]
     isValidSplit = False
-    while (
-        not isValidSplit
-        and counter < ntol
-    ):
+    counter = 0
+    
+    while not isValidSplit and counter < ntol:
         if not predefinedSplit:
-            patient_split[splits.train.value] = random.sample(
-                list(pat_id), round(len(pat_id) * train_ratio)
-            )
-            remain = [pat for pat in pat_id if pat not in patient_split[splits.train.value]]
-            patient_split[splits.validate.value] = random.sample(
-                remain, round(len(remain) * valid_ratio / (test_ratio + valid_ratio))
-            )
-            patient_split[splits.test.value] = [
-                pat for pat in remain if pat not in patient_split[splits.validate.value]
-            ]
-        # obtain image number corresponding to patient split
-        image_split = {}
-        for key, val in patient_split.items():
-            image_split[key] = pat_df[pat_df[colname.PATIENTID.value].isin(val)][colname.IMAGEID.value]
+            np.random.shuffle(unique_pat_id)
+            train_end = int(len(unique_pat_id) * train_ratio)
+            valid_end = train_end + int(len(unique_pat_id) * valid_ratio)
+            patient_split = {
+                splits.train.value: unique_pat_id[:train_end],
+                splits.validate.value: unique_pat_id[train_end:valid_end],
+                splits.test.value: unique_pat_id[valid_end:],
+            }
 
+        # obtain image number corresponding to patient split
+        image_split = {
+            key: pat_df[pat_df[colname.PATIENTID.value].isin(val)][colname.IMAGEID.value]
+            for key, val in patient_split.items()
+        }
+            
         # shuffle image patch in each split
         patch_split = {}
         label_split = {}
         index_split = {}
         split_balance = {}
-        for key, val in image_split.items():
-            _label = label[label[colname.IMAGEID.value].isin(val)]
-            _index, _label = unison_shuffled_copies(_label.index, _label)
-            patch_split[key] = intensity[_index, :]
-            label_split[key] = _label
-            index_split[key] = _index
-            split_balance[key] = label_split[key][celltype].mean()
+        for key, image_ids in image_split.items():
+            indices = label[label[colname.IMAGEID.value].isin(image_ids)].index
+            shuffled_indices = np.random.permutation(indices)
+            patch_split[key] = intensity[shuffled_indices, :]
+            label_split[key] = label[celltype].iloc[shuffled_indices]
+            index_split[key] = shuffled_indices
+            split_balance[key] = label_split[key].mean()
 
         # compute sample condition values
         tr_prop = patch_split[splits.train.value].shape[0] / npatches
@@ -139,16 +130,15 @@ def stratified_data_split(
 
         # if sample conditions satisfied, save splits
         if isValidSplit or predefinedSplit:
-            print("Sample Proportions:")
-            for key, val in patch_split.items():
-                print("{}: {:.3f}".format(key, val.shape[0] / npatches))
-
-            print("\nPositive Proportions:")
-            for key, val in split_balance.items():
-                print("{}: {:.3f}".format(key, val))
+            print("Split constraints satisfied\nPatch proportions and Positive patch proportions:")
+            for split, imgs in patch_split.items():
+                proportion = imgs.shape[0] / npatches
+                positive_proportion = split_balance[split]
+                print(f"{split:<10}: {proportion:>5.3f}, {positive_proportion:>5.3f}")
 
             # save splits
             split_info = {
+                "celltype": celltype,
                 "channel": channel,
                 "patient_df": pat_df,
                 "train_set_mean": np.mean(patch_split[splits.train.value], axis=(0, 1, 2)),
@@ -161,38 +151,42 @@ def stratified_data_split(
                 "validate_index": index_split[splits.validate.value],
                 "train_index": index_split[splits.train.value],
             }
-            print('Saving splits')
             save_splits(save_path, patch_split, label_split, split_info)
             return
         else:
             counter += 1
-            print(
-                f"Could not satisfy data split constraints, trying again, attempt number: {counter}"
-            )
+            print(f"Attempt {counter}: Could not satisfy data split constraints, trying again.")
     print("Could not satisfy data split constraints, try again or adjust constraints")
 
 
 def save_splits(save_path, data_dict, label_dict, split_info):
+    # save split info
     with open(os.path.join(save_path, "split_info.pkl"), "wb") as f:
         pickle.dump(split_info, f, protocol=4)
 
-    for key, val in data_dict.items():
+    # save splits
+    for split in tqdm(data_dict.keys(), desc="Saving splits"):
+        img_array = data_dict[split]
+
         # make dir
-        _path = os.path.join(save_path, key)
+        _path = os.path.join(save_path, split)
         if not os.path.isdir(_path):
             os.makedirs(_path)
             os.makedirs(os.path.join(_path, "0"))
             os.makedirs(os.path.join(_path, "1"))
 
         # save labels
-        label_dict[key].to_csv(os.path.join(_path, "label.csv"), index=False)
+        label_dict[split].to_csv(os.path.join(_path, "label.csv"), index=False)
 
         # save images
-        np.save(os.path.join(_path, "img.npy"), val)
-        nimage = val.shape[0]
-        for ind in range(nimage):
-            label = str(label_dict[key].iloc[ind])
-            np.save(
-                os.path.join(_path, f"{label}/patch_{ind}.npy"),
-                val[ind, ...],
-            )
+        np.save(os.path.join(_path, "img.npy"), img_array)
+        nimage = img_array.shape[0]
+        patch_label = label_dict[split].values
+        patch_index = split_info[f'{split}_index']
+        for i in tqdm(range(nimage), desc=f"Saving images for {split} split", leave=False):
+            label = patch_label[i]
+            index = patch_index[i]
+            dense_tensor = torch.tensor(img_array[i, ...])
+            sparse_tensor = dense_tensor.to_sparse()
+            # Save the sparse tensor
+            torch.save(sparse_tensor, os.path.join(_path, f"{label}/patch_{index}.pt"))

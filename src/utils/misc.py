@@ -14,17 +14,3 @@ def uniquify(path):
         counter += 1
 
     return path
-
-
-def unison_shuffled_copies(a, b):
-    assert len(a) == len(b)
-    p = np.random.permutation(len(a))
-    if isinstance(a, pd.DataFrame):
-        permA = a.iloc[p]
-    else:
-        permA = a[p]
-    if isinstance(b, pd.DataFrame):
-        permB = b.iloc[p]
-    else:
-        permB = b[p]
-    return permA, permB

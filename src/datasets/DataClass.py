@@ -52,7 +52,7 @@ def make_torch_dataloader(
 ):
 
     # Load the data info which should contain the channel-wise mean and stdev of the training data
-    with open(os.path.join(data_path, "data_info.pkl"), "rb") as f:
+    with open(os.path.join(data_path, "split_info.pkl"), "rb") as f:
         info_dict = pickle.load(f)
 
     # Define the image transformations

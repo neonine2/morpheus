@@ -28,11 +28,3 @@ def unison_shuffled_copies(a, b):
     else:
         permB = b[p]
     return permA, permB
-
-
-def check_split_constraints(x, y, z, eps, train_lb):
-    """
-    ensure that train_lb% of image patches are in training set and proportion of
-    positive/negative patches are similar across train,test,validation sets
-    """
-    return (x < eps) and (y < eps) and (z > train_lb)
